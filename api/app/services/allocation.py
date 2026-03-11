@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from typing import Dict, TypeVar
+
+T = TypeVar("T")  # Generic type for district IDs (can be int or str)
+
 
 def allocate_fair_share(
-    predicted_by_district: dict[int, float],
+    predicted_by_district: Dict[T, float],
     total_available_stock: float,
-) -> dict[int, float]:
+) -> Dict[T, float]:
     if total_available_stock <= 0 or not predicted_by_district:
         return {district_id: 0.0 for district_id in predicted_by_district}
 
@@ -12,7 +16,7 @@ def allocate_fair_share(
     if total_pred <= 0:
         return {district_id: 0.0 for district_id in predicted_by_district}
 
-    allocations: dict[int, float] = {}
+    allocations: Dict[T, float] = {}
     for district_id, pred in predicted_by_district.items():
         share = (max(pred, 0.0) / total_pred) * total_available_stock
         allocations[district_id] = min(max(pred, 0.0), share)

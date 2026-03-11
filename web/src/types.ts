@@ -22,3 +22,10 @@ export type MetricsSummary = {
   avg_shortage: number;
   avg_forecast_error: number;
 };
+
+export type AuthUser = {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  isAnonymous: boolean;
+};
