@@ -54,7 +54,7 @@ export default function LandingPage() {
       <nav className="fixed top-0 w-full backdrop-blur-md bg-slate-900/80 border-b border-cyan-500/10 z-50 px-4 sm:px-8 py-4">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="text-2xl font-bold bg-gradient-to-r from-cyan-400 to-cyan-300 bg-clip-text text-transparent">
-            MedBalance AI
+            MedBalance
           </div>
           <div className="hidden md:flex gap-8 items-center">
             <a
