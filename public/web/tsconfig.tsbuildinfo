@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/api.ts","./src/firebaseconfig.ts","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/components/protectedroute.tsx","./src/context/authcontext.tsx","./src/pages/allocationpage.tsx","./src/pages/forecastpage.tsx","./src/pages/landingpage.tsx","./src/pages/uploadpage.tsx","./src/pages/auth/loginpage.tsx"],"version":"5.9.3"}
