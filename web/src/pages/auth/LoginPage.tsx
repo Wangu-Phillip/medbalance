@@ -7,28 +7,76 @@ import {
   setPersistence,
   browserLocalPersistence,
 } from "firebase/auth";
-import { auth } from "../../firebaseConfig";
+import { doc, getDoc } from "firebase/firestore";
+import { useNavigate } from "react-router-dom";
+import { auth, db } from "../../firebaseConfig";
 
 interface LoginPageProps {
   onLoginSuccess?: (user: User) => void;
 }
 
+type UserRole = "admin" | "district_manager" | null;
+
 export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
+  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [userRole, setUserRole] = useState<UserRole>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
 
   useEffect(() => {
     // Check if user is already logged in
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
+
+      if (currentUser) {
+        try {
+          // Fetch user role from Firestore
+          const userDocRef = doc(db, "users", currentUser.uid);
+          const userDocSnapshot = await getDoc(userDocRef);
+
+          if (userDocSnapshot.exists()) {
+            const userData = userDocSnapshot.data();
+            const role = userData.role as UserRole;
+            setUserRole(role);
+
+            // Auto-redirect based on role
+            if (role === "admin") {
+              setRedirecting(true);
+              navigate("/admin");
+            } else if (role === "district_manager") {
+              setRedirecting(true);
+              navigate("/district-manager");
+            }
+          }
+        } catch (err) {
+          console.error("Error fetching user role:", err);
+        }
+      }
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [navigate]);
+
+  const fetchUserRole = async (uid: string): Promise<UserRole> => {
+    try {
+      const userDocRef = doc(db, "users", uid);
+      const userDocSnapshot = await getDoc(userDocRef);
+
+      if (userDocSnapshot.exists()) {
+        const userData = userDocSnapshot.data();
+        return (userData.role as UserRole) || null;
+      }
+      return null;
+    } catch (err) {
+      console.error("Error fetching user role:", err);
+      return null;
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,6 +107,19 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
         password,
       );
 
+      // Fetch user role from Firestore
+      const role = await fetchUserRole(userCredential.user.uid);
+
+      if (!role) {
+        setError("User role not found. Please contact an administrator.");
+        setLoading(false);
+        // Sign out the user since they don't have a role
+        await signOut(auth);
+        return;
+      }
+
+      setUserRole(role);
+
       // Clear form
       setEmail("");
       setPassword("");
@@ -66,6 +127,14 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
       // Call the callback if provided
       if (onLoginSuccess) {
         onLoginSuccess(userCredential.user);
+      }
+
+      // Redirect based on role
+      setRedirecting(true);
+      if (role === "admin") {
+        navigate("/admin");
+      } else if (role === "district_manager") {
+        navigate("/district-manager");
       }
     } catch (err: any) {
       // Handle Firebase errors
@@ -95,49 +164,25 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
       setEmail("");
       setPassword("");
       setError("");
+      setUserRole(null);
+      setRedirecting(false);
     } catch (err) {
       setError("Failed to log out");
     }
   };
 
-  if (user) {
+  // Show loading state while redirecting
+  if (redirecting) {
     return (
-      <div className="min-h-screen flex items-center justify-center px-4 bg-gradient-to-br from-slate-900 to-slate-800">
-        <div className="w-full max-w-md">
-          <div className="bg-slate-800/60 border border-cyan-500/20 rounded-xl p-8 backdrop-blur-xl">
-            <div className="text-center mb-8">
-              <div className="text-4xl font-bold bg-gradient-to-r from-cyan-400 to-cyan-300 bg-clip-text text-transparent mb-2">
-                Welcome
-              </div>
-              <p className="text-slate-300">You are logged in</p>
-            </div>
-
-            <div className="space-y-4 mb-8 p-4 bg-slate-900/50 rounded-lg border border-cyan-500/10">
-              <div>
-                <label className="text-slate-400 text-sm">Email</label>
-                <p className="text-slate-50 font-medium break-all">
-                  {user.email}
-                </p>
-              </div>
-              <div>
-                <label className="text-slate-400 text-sm">User ID</label>
-                <p className="text-slate-50 font-mono text-xs break-all">
-                  {user.uid}
-                </p>
-              </div>
-            </div>
-
-            <button
-              onClick={handleLogout}
-              className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-200"
-            >
-              Log Out
-            </button>
-          </div>
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800">
+        <div className="text-center">
+          <div className="inline-block w-12 h-12 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin mb-4"></div>
+          <p className="text-slate-300">Redirecting to your dashboard...</p>
         </div>
       </div>
     );
   }
+
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4 bg-gradient-to-br from-slate-900 to-slate-800 text-slate-50 overflow-hidden">
@@ -244,17 +289,6 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
               )}
             </button>
           </form>
-
-          {/* Demo Credentials */}
-          <div className="mt-6 pt-6 border-t border-cyan-500/10">
-            <p className="text-slate-400 text-xs mb-3">
-              Demo credentials (test only):
-            </p>
-            <div className="space-y-2 text-xs text-slate-500">
-              <p>Email: demo@medbalance.com</p>
-              <p>Password: Demo123!@#</p>
-            </div>
-          </div>
         </div>
 
         {/* Footer Text */}
