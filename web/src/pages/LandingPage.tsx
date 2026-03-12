@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 
 export default function LandingPage() {
   const heroRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     // Smooth scroll behavior
@@ -92,7 +94,10 @@ export default function LandingPage() {
               Contact Us
               <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-cyan-400 group-hover:w-full transition-all duration-300"></span>
             </a>
-            <button className="text-slate-100 border border-cyan-500 hover:text-cyan-400 transition-colors px-6 py-2 rounded-lg hover:bg-cyan-500/10">
+            <button
+              onClick={() => navigate("/login")}
+              className="text-slate-100 border border-cyan-500 hover:text-cyan-400 transition-colors px-6 py-2 rounded-lg hover:bg-cyan-500/10"
+            >
               Login
             </button>
           </div>
