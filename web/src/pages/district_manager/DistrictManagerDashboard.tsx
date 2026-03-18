@@ -1,7 +1,19 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
-import { auth } from "../../firebaseConfig";
+import { auth, db } from "../../firebaseConfig";
+import { useAuth } from "../../context/AuthContext";
+import {
+  collection,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  getDocs,
+  query,
+  orderBy,
+  where,
+} from "firebase/firestore";
 import {
   LineChart,
   Line,
@@ -13,8 +25,6 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  ScatterChart,
-  Scatter,
 } from "recharts";
 
 interface StockLevel {
@@ -33,13 +43,123 @@ interface AllocationRecommendation {
   urgency: "critical" | "high" | "medium" | "low";
 }
 
+interface MedicineRecord {
+  id: string;
+  name: string;
+  quantity: number;
+  unit: string;
+  expiryDate: string;
+  allocatedQuantity: number;
+  districtId: string;
+  districtName: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+interface Facility {
+  id: string;
+  name: string;
+  districtId: string;
+  districtName: string;
+  status: "active" | "inactive";
+  createdAt?: number;
+  updatedAt?: number;
+}
+
 export default function DistrictManagerDashboard() {
   const navigate = useNavigate();
+  const { districtId, districtName, loading: authLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<
-    "overview" | "forecast" | "allocation" | "analytics" | "reports"
+    | "overview"
+    | "medicines"
+    | "forecast"
+    | "allocation"
+    | "analytics"
+    | "reports"
   >("overview");
-  const [district] = useState("Central District");
   const [loggingOut, setLoggingOut] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [medicines, setMedicines] = useState<MedicineRecord[]>([]);
+  const [facilities, setFacilities] = useState<Facility[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [savingMedicine, setSavingMedicine] = useState(false);
+  const [showAddMedicineModal, setShowAddMedicineModal] = useState(false);
+  const [editingMedicine, setEditingMedicine] = useState<MedicineRecord | null>(
+    null,
+  );
+  const [newMedicine, setNewMedicine] = useState({
+    name: "",
+    quantity: "",
+    unit: "",
+    expiryDate: "",
+    allocatedQuantity: "",
+  });
+
+  // Redirect if not a district manager
+  useEffect(() => {
+    if (!authLoading && !districtId) {
+      navigate("/login");
+    }
+  }, [authLoading, districtId, navigate]);
+
+  // Fetch district-specific data
+  useEffect(() => {
+    if (districtId) {
+      fetchData();
+    }
+  }, [districtId]);
+
+  const fetchData = async () => {
+    if (!districtId) {
+      console.log("Cannot fetch data: districtId is null or undefined");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      console.log("Fetching medicines for districtId:", districtId);
+
+      // Fetch medicines for this district only
+      const medicinesQuery = query(
+        collection(db, "medicines"),
+        where("districtId", "==", districtId),
+        orderBy("createdAt", "desc"),
+      );
+      const medicinesSnapshot = await getDocs(medicinesQuery);
+      console.log("Medicines found:", medicinesSnapshot.docs.length);
+      const medicinesData = medicinesSnapshot.docs.map((doc) => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          allocatedQuantity: data.allocatedQuantity || 0,
+        } as MedicineRecord;
+      });
+      setMedicines(medicinesData);
+
+      // Fetch facilities for this district only
+      const facilitiesQuery = query(
+        collection(db, "facilities"),
+        where("districtId", "==", districtId),
+        orderBy("createdAt", "desc"),
+      );
+      const facilitiesSnapshot = await getDocs(facilitiesQuery);
+      console.log("Facilities found:", facilitiesSnapshot.docs.length);
+      const facilitiesData = facilitiesSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Facility[];
+      setFacilities(facilitiesData);
+
+      setError(null);
+    } catch (err) {
+      console.error("Error fetching data:", err);
+      setError("Failed to load data from database");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleLogout = async () => {
     try {
@@ -51,6 +171,129 @@ export default function DistrictManagerDashboard() {
       setLoggingOut(false);
     }
   };
+
+  const handleAddMedicine = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!districtId) {
+      setError("District ID not found");
+      return;
+    }
+    if (
+      !newMedicine.name ||
+      !newMedicine.quantity ||
+      !newMedicine.unit ||
+      !newMedicine.expiryDate ||
+      newMedicine.allocatedQuantity === ""
+    ) {
+      setError("Please fill all medicine fields");
+      return;
+    }
+
+    const allocatedQty = parseInt(newMedicine.allocatedQuantity);
+    const totalQty = parseInt(newMedicine.quantity);
+    if (allocatedQty > totalQty) {
+      setError("Allocated quantity cannot exceed total quantity");
+      return;
+    }
+
+    try {
+      setSavingMedicine(true);
+      const now = Date.now();
+
+      if (editingMedicine) {
+        // Update existing medicine
+        await updateDoc(doc(db, "medicines", editingMedicine.id), {
+          name: newMedicine.name,
+          quantity: parseInt(newMedicine.quantity),
+          unit: newMedicine.unit,
+          expiryDate: newMedicine.expiryDate,
+          allocatedQuantity: parseInt(newMedicine.allocatedQuantity),
+          updatedAt: now,
+        });
+        setSuccess("Medicine updated successfully");
+        setEditingMedicine(null);
+      } else {
+        // Add new medicine - automatically assign to this district
+        await addDoc(collection(db, "medicines"), {
+          name: newMedicine.name,
+          quantity: parseInt(newMedicine.quantity),
+          unit: newMedicine.unit,
+          expiryDate: newMedicine.expiryDate,
+          allocatedQuantity: parseInt(newMedicine.allocatedQuantity),
+          districtId: districtId,
+          districtName: districtName,
+          createdAt: now,
+          updatedAt: now,
+        });
+        setSuccess("Medicine added successfully");
+      }
+
+      setNewMedicine({
+        name: "",
+        quantity: "",
+        unit: "",
+        expiryDate: "",
+        allocatedQuantity: "",
+      });
+      setShowAddMedicineModal(false);
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error adding/updating medicine:", err);
+      setError("Failed to add/update medicine");
+    } finally {
+      setSavingMedicine(false);
+    }
+  };
+
+  const handleEditMedicine = (medicine: MedicineRecord) => {
+    setEditingMedicine(medicine);
+    setNewMedicine({
+      name: medicine.name,
+      quantity: medicine.quantity.toString(),
+      unit: medicine.unit,
+      expiryDate: medicine.expiryDate,
+      allocatedQuantity: medicine.allocatedQuantity.toString(),
+    });
+    setShowAddMedicineModal(true);
+  };
+
+  const handleDeleteMedicine = async (medicineId: string) => {
+    if (!confirm("Are you sure you want to delete this medicine?")) return;
+
+    try {
+      setSavingMedicine(true);
+      await deleteDoc(doc(db, "medicines", medicineId));
+      setSuccess("Medicine deleted successfully");
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error deleting medicine:", err);
+      setError("Failed to delete medicine");
+    } finally {
+      setSavingMedicine(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMedicine(null);
+    setNewMedicine({
+      name: "",
+      quantity: "",
+      unit: "",
+      expiryDate: "",
+      allocatedQuantity: "",
+    });
+    setShowAddMedicineModal(false);
+  };
+
+  if (authLoading || loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center">
+        <div className="text-white">Loading...</div>
+      </div>
+    );
+  }
 
   const demandForecastData = [
     { month: "Jan", demand: 4000, forecast: 4200 },
@@ -173,12 +416,132 @@ export default function DistrictManagerDashboard() {
 
   const handleExportPDF = () => {
     alert(
-      `Exporting allocation report for ${district}...\nThis would generate a PDF with allocation recommendations, demand forecasts, and comparative analysis.`,
+      `Exporting allocation report for ${districtName}...\nThis would generate a PDF with allocation recommendations, demand forecasts, and comparative analysis.`,
     );
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-slate-50">
+      {/* Error and Success Messages */}
+      {error && (
+        <div className="fixed top-4 right-4 bg-red-500/20 border border-red-500/30 text-red-300 px-4 py-3 rounded-lg">
+          {error}
+        </div>
+      )}
+      {success && (
+        <div className="fixed top-4 right-4 bg-green-500/20 border border-green-500/30 text-green-300 px-4 py-3 rounded-lg">
+          {success}
+        </div>
+      )}
+
+      {/* Add Medicine Modal */}
+      {showAddMedicineModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-slate-800 border border-cyan-500/20 rounded-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-cyan-400 mb-4">
+              {editingMedicine ? "Edit Medicine" : "Add Medicine"}
+            </h3>
+            <form onSubmit={handleAddMedicine} className="space-y-4">
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">
+                  Medicine Name
+                </label>
+                <input
+                  type="text"
+                  value={newMedicine.name}
+                  onChange={(e) =>
+                    setNewMedicine({ ...newMedicine, name: e.target.value })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                  placeholder="e.g., Paracetamol"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">
+                  Quantity
+                </label>
+                <input
+                  type="number"
+                  value={newMedicine.quantity}
+                  onChange={(e) =>
+                    setNewMedicine({ ...newMedicine, quantity: e.target.value })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                  placeholder="e.g., 1000"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">
+                  Unit
+                </label>
+                <input
+                  type="text"
+                  value={newMedicine.unit}
+                  onChange={(e) =>
+                    setNewMedicine({ ...newMedicine, unit: e.target.value })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                  placeholder="e.g., tablets, bottles"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">
+                  Expiry Date
+                </label>
+                <input
+                  type="date"
+                  value={newMedicine.expiryDate}
+                  onChange={(e) =>
+                    setNewMedicine({
+                      ...newMedicine,
+                      expiryDate: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">
+                  Allocated Quantity
+                </label>
+                <input
+                  type="number"
+                  value={newMedicine.allocatedQuantity}
+                  onChange={(e) =>
+                    setNewMedicine({
+                      ...newMedicine,
+                      allocatedQuantity: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                  placeholder="e.g., 500"
+                />
+              </div>
+              <div className="text-sm text-slate-400">
+                District: <span className="text-cyan-400">{districtName}</span>
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="submit"
+                  disabled={savingMedicine}
+                  className="flex-1 px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-slate-900 font-semibold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {savingMedicine ? "Saving..." : "Save"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  disabled={savingMedicine}
+                  className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="sticky top-0 z-40 border-b border-cyan-500/10 bg-slate-900/80 backdrop-blur-md px-6 py-4">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
@@ -186,7 +549,7 @@ export default function DistrictManagerDashboard() {
             <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-cyan-300 bg-clip-text text-transparent">
               District Manager Dashboard
             </h1>
-            <p className="text-slate-400 text-sm mt-1">{district}</p>
+            <p className="text-slate-400 text-sm mt-1">{districtName}</p>
           </div>
           <button
             onClick={handleLogout}
@@ -203,6 +566,7 @@ export default function DistrictManagerDashboard() {
         <div className="max-w-7xl mx-auto flex gap-8 overflow-x-auto">
           {[
             { key: "overview", label: "Overview" },
+            { key: "medicines", label: "Medicines" },
             { key: "forecast", label: "Demand Forecast" },
             { key: "allocation", label: "Allocations" },
             { key: "analytics", label: "Analytics" },
@@ -214,6 +578,7 @@ export default function DistrictManagerDashboard() {
                 setActiveTab(
                   tab.key as
                     | "overview"
+                    | "medicines"
                     | "forecast"
                     | "allocation"
                     | "analytics"
@@ -241,32 +606,32 @@ export default function DistrictManagerDashboard() {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
                 <div className="text-slate-400 text-sm mb-2">
-                  Total Stock Value
+                  Total Quantities
                 </div>
                 <div className="text-3xl font-bold text-cyan-400">
-                  ${(6300 * 15).toLocaleString()}
+                  {medicines
+                    .reduce((sum, m) => sum + m.quantity, 0)
+                    .toLocaleString()}
                 </div>
-                <p className="text-xs text-slate-500 mt-2">
-                  6,300 units in stock
-                </p>
+                <p className="text-xs text-slate-500 mt-2">Units in stock</p>
               </div>
               <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
                 <div className="text-slate-400 text-sm mb-2">
-                  Average Demand/Month
+                  Medicine Types
                 </div>
                 <div className="text-3xl font-bold text-emerald-400">
-                  4,350 units
+                  {medicines.length}
                 </div>
-                <p className="text-xs text-slate-500 mt-2">Forecasted</p>
+                <p className="text-xs text-slate-500 mt-2">
+                  Different medicines
+                </p>
               </div>
               <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
-                <div className="text-slate-400 text-sm mb-2">
-                  Critical Items
+                <div className="text-slate-400 text-sm mb-2">Facilities</div>
+                <div className="text-3xl font-bold text-cyan-400">
+                  {facilities.length}
                 </div>
-                <div className="text-3xl font-bold text-red-400">2</div>
-                <p className="text-xs text-slate-500 mt-2">
-                  Urgent attention needed
-                </p>
+                <p className="text-xs text-slate-500 mt-2">In your district</p>
               </div>
               <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
                 <div className="text-slate-400 text-sm mb-2">
@@ -345,6 +710,138 @@ export default function DistrictManagerDashboard() {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Medicines Tab */}
+        {activeTab === "medicines" && (
+          <div className="space-y-8">
+            {/* Medicines Summary */}
+            <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
+              <h3 className="text-lg font-semibold mb-4">Medicines Summary</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-4 bg-slate-900/50 rounded-lg border border-cyan-500/20">
+                  <p className="text-slate-400 text-sm">Total Medicines</p>
+                  <p className="text-3xl font-bold text-cyan-400 mt-2">
+                    {medicines.length}
+                  </p>
+                </div>
+                <div className="p-4 bg-slate-900/50 rounded-lg border border-cyan-500/20">
+                  <p className="text-slate-400 text-sm">Total Units</p>
+                  <p className="text-3xl font-bold text-emerald-400 mt-2">
+                    {medicines
+                      .reduce((sum, m) => sum + m.quantity, 0)
+                      .toLocaleString()}
+                  </p>
+                </div>
+                <div className="p-4 bg-slate-900/50 rounded-lg border border-cyan-500/20">
+                  <p className="text-slate-400 text-sm">Average Units</p>
+                  <p className="text-3xl font-bold text-cyan-400 mt-2">
+                    {medicines.length > 0
+                      ? Math.round(
+                          medicines.reduce((sum, m) => sum + m.quantity, 0) /
+                            medicines.length,
+                        )
+                      : 0}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Medicines Management */}
+            <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold">
+                  Medicines in {districtName}
+                </h3>
+                <button
+                  onClick={() => {
+                    setEditingMedicine(null);
+                    setNewMedicine({
+                      name: "",
+                      quantity: "",
+                      unit: "",
+                      expiryDate: "",
+                      allocatedQuantity: "",
+                    });
+                    setShowAddMedicineModal(true);
+                  }}
+                  className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-slate-900 font-semibold rounded-lg transition-all"
+                >
+                  + Add Medicine
+                </button>
+              </div>
+
+              {medicines.length === 0 ? (
+                <div className="text-center py-8 text-slate-400">
+                  No medicines added yet. Click "Add Medicine" to get started.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {medicines.map((medicine) => (
+                    <div
+                      key={medicine.id}
+                      className="p-4 rounded-lg bg-slate-900/50 border border-cyan-500/10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
+                    >
+                      <div className="flex-1">
+                        <p className="font-semibold text-cyan-400 text-lg">
+                          {medicine.name}
+                        </p>
+                        <div className="mt-3 grid grid-cols-4 gap-4 text-sm">
+                          <div>
+                            <p className="text-slate-400 text-xs mb-1">
+                              Total Quantity
+                            </p>
+                            <p className="text-slate-200 font-semibold">
+                              {medicine.quantity} {medicine.unit}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-slate-400 text-xs mb-1">
+                              Allocated
+                            </p>
+                            <p className="text-cyan-400 font-semibold">
+                              {medicine.allocatedQuantity} {medicine.unit}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-slate-400 text-xs mb-1">
+                              Available
+                            </p>
+                            <p className="text-emerald-400 font-semibold">
+                              {medicine.quantity - medicine.allocatedQuantity}{" "}
+                              {medicine.unit}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-slate-400 text-xs mb-1">
+                              Expiry Date
+                            </p>
+                            <p className="text-slate-200 font-semibold">
+                              {medicine.expiryDate}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleEditMedicine(medicine)}
+                          className="px-4 py-2 bg-blue-500/20 text-blue-300 rounded-lg hover:bg-blue-500/30 transition-all font-semibold text-sm"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDeleteMedicine(medicine.id)}
+                          className="px-4 py-2 bg-red-500/20 text-red-300 rounded-lg hover:bg-red-500/30 transition-all font-semibold text-sm"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
