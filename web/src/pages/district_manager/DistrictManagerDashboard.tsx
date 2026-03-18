@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth, db } from "../../firebaseConfig";
 import { useAuth } from "../../context/AuthContext";
+import { generateStockAnalysis } from "../../api";
+import type { StockAnalysisResponse } from "../../types";
 import {
   collection,
   addDoc,
@@ -104,6 +106,11 @@ export default function DistrictManagerDashboard() {
   const [editingMedicine, setEditingMedicine] = useState<MedicineRecord | null>(
     null,
   );
+  const [aiAnalysis, setAiAnalysis] = useState<StockAnalysisResponse | null>(
+    null,
+  );
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
   const [allocationForm, setAllocationForm] = useState({
     medicineId: "",
     facilityId: "",
@@ -131,6 +138,43 @@ export default function DistrictManagerDashboard() {
       fetchData();
     }
   }, [districtId]);
+
+  // Generate AI analysis when data changes
+  useEffect(() => {
+    if (medicines.length > 0 && districtId && districtName) {
+      generateAIAnalysis();
+    }
+  }, [medicines, facilities, allocations, districtId]);
+
+  const generateAIAnalysis = async () => {
+    try {
+      setAiLoading(true);
+      setAiError(null);
+
+      console.log("Generating AI analysis for district:", districtName);
+
+      const analysis = await generateStockAnalysis(
+        districtId!,
+        districtName!,
+        medicines,
+        facilities,
+        allocations,
+      );
+
+      setAiAnalysis(analysis);
+      console.log("AI analysis generated successfully");
+    } catch (err) {
+      console.error("Error generating AI analysis:", err);
+      setAiError(
+        err instanceof Error
+          ? err.message
+          : "Failed to generate AI analysis. Using default data.",
+      );
+      // AI analysis is optional - continue with default data
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const fetchData = async () => {
     if (!districtId) {
@@ -419,7 +463,8 @@ export default function DistrictManagerDashboard() {
     );
   }
 
-  const demandForecastData = [
+  // Use AI-generated data if available, otherwise use defaults
+  const demandForecastData = aiAnalysis?.demandForecast || [
     { month: "Jan", demand: 4000, forecast: 4200 },
     { month: "Feb", demand: 3500, forecast: 3800 },
     { month: "Mar", demand: 4200, forecast: 4500 },
@@ -428,7 +473,7 @@ export default function DistrictManagerDashboard() {
     { month: "Jun", demand: 5200, forecast: 5400 },
   ];
 
-  const stockLevels: StockLevel[] = [
+  const stockLevels = aiAnalysis?.stockLevels || [
     {
       medicine: "Paracetamol",
       current: 2500,
@@ -455,14 +500,23 @@ export default function DistrictManagerDashboard() {
     },
   ];
 
-  const allocationRecommendations: AllocationRecommendation[] = [
+  const allocationRecommendations = aiAnalysis?.allocationRecommendations?.map(
+    (rec) => ({
+      id: rec.medicine,
+      medicine: rec.medicine,
+      currentStock: rec.currentStock,
+      predictedDemand: rec.predictedDemand,
+      recommendedAllocation: rec.recommendedAllocation,
+      urgency: rec.urgency,
+    }),
+  ) || [
     {
       id: "1",
       medicine: "Amoxicillin",
       currentStock: 800,
       predictedDemand: 1200,
       recommendedAllocation: 500,
-      urgency: "critical",
+      urgency: "critical" as const,
     },
     {
       id: "2",
@@ -470,7 +524,7 @@ export default function DistrictManagerDashboard() {
       currentStock: 1200,
       predictedDemand: 1800,
       recommendedAllocation: 700,
-      urgency: "high",
+      urgency: "high" as const,
     },
     {
       id: "3",
@@ -478,7 +532,7 @@ export default function DistrictManagerDashboard() {
       currentStock: 2500,
       predictedDemand: 3200,
       recommendedAllocation: 800,
-      urgency: "medium",
+      urgency: "medium" as const,
     },
     {
       id: "4",
@@ -486,11 +540,11 @@ export default function DistrictManagerDashboard() {
       currentStock: 1800,
       predictedDemand: 2100,
       recommendedAllocation: 400,
-      urgency: "low",
+      urgency: "low" as const,
     },
   ];
 
-  const comparisonData = [
+  const comparisonData = aiAnalysis?.comparisonData || [
     {
       medicine: "Paracetamol",
       demand: 3200,
@@ -555,6 +609,29 @@ export default function DistrictManagerDashboard() {
       {success && (
         <div className="fixed top-4 right-4 bg-green-500/20 border border-green-500/30 text-green-300 px-4 py-3 rounded-lg">
           {success}
+        </div>
+      )}
+
+      {/* AI Analysis Status */}
+      {aiLoading && (
+        <div className="fixed top-4 left-4 bg-blue-500/20 border border-blue-500/30 text-blue-300 px-4 py-3 rounded-lg flex items-center gap-2">
+          <div className="animate-spin h-4 w-4 border-2 border-blue-300 border-t-transparent rounded-full"></div>
+          <span>Generating AI analysis...</span>
+        </div>
+      )}
+
+      {aiError && aiAnalysis === null && (
+        <div className="fixed top-20 left-4 bg-yellow-500/20 border border-yellow-500/30 text-yellow-300 px-4 py-3 rounded-lg">
+          <p className="text-sm">{aiError}</p>
+          <p className="text-xs text-yellow-200 mt-1">
+            Using default analysis data
+          </p>
+        </div>
+      )}
+
+      {aiAnalysis && (
+        <div className="fixed top-4 left-4 bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 px-4 py-3 rounded-lg text-sm">
+          ✓ AI Analysis Ready
         </div>
       )}
 
@@ -969,6 +1046,25 @@ export default function DistrictManagerDashboard() {
                 ))}
               </div>
             </div>
+
+            {/* AI Insights */}
+            {aiAnalysis?.insights && aiAnalysis.insights.length > 0 && (
+              <div className="p-6 rounded-xl border border-purple-500/20 bg-gradient-to-br from-purple-900/30 to-slate-900/60">
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <span>Medbalance AI Insights</span>
+                </h3>
+                <div className="space-y-3">
+                  {aiAnalysis.insights.slice(0, 4).map((insight, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3 rounded-lg bg-slate-900/50 border border-purple-500/20"
+                    >
+                      <p className="text-sm text-slate-300">{insight}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

@@ -29,3 +29,41 @@ export type AuthUser = {
   displayName: string | null;
   isAnonymous: boolean;
 };
+
+// Gemini AI Response Types
+export type DemandForecastPoint = {
+  month: string;
+  demand: number;
+  forecast: number;
+};
+
+export type StockLevelAnalysis = {
+  medicine: string;
+  current: number;
+  predicted: number;
+  recommended: number;
+};
+
+export type AllocationRecommendationDetail = {
+  medicine: string;
+  currentStock: number;
+  predictedDemand: number;
+  recommendedAllocation: number;
+  urgency: "critical" | "high" | "medium" | "low";
+  reason: string;
+};
+
+export type ComparisonDataPoint = {
+  medicine: string;
+  demand: number;
+  supply: number;
+  gap: number;
+};
+
+export type StockAnalysisResponse = {
+  demandForecast: DemandForecastPoint[];
+  stockLevels: StockLevelAnalysis[];
+  allocationRecommendations: AllocationRecommendationDetail[];
+  comparisonData: ComparisonDataPoint[];
+  insights: string[];
+};
