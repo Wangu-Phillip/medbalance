@@ -525,121 +525,25 @@ export default function DistrictManagerDashboard() {
     );
   }
 
-  // Use AI-generated data if available, otherwise use defaults
-  const demandForecastData = aiAnalysis?.demandForecast || [
-    { month: "Jan", demand: 4000, forecast: 4200 },
-    { month: "Feb", demand: 3500, forecast: 3800 },
-    { month: "Mar", demand: 4200, forecast: 4500 },
-    { month: "Apr", demand: 4100, forecast: 4300 },
-    { month: "May", demand: 4800, forecast: 5000 },
-    { month: "Jun", demand: 5200, forecast: 5400 },
-  ];
+  // Use AI-generated data if available, otherwise empty
+  const demandForecastData = aiAnalysis?.demandForecast || [];
 
-  const stockLevels = aiAnalysis?.stockLevels || [
-    {
-      medicine: "Paracetamol",
-      current: 2500,
-      predicted: 3200,
-      recommended: 3500,
-    },
-    {
-      medicine: "Amoxicillin",
-      current: 800,
-      predicted: 1200,
-      recommended: 1500,
-    },
-    {
-      medicine: "Ibuprofen",
-      current: 1800,
-      predicted: 2100,
-      recommended: 2500,
-    },
-    {
-      medicine: "Metformin",
-      current: 1200,
-      predicted: 1800,
-      recommended: 2000,
-    },
-  ];
+  const stockLevels = aiAnalysis?.stockLevels || [];
 
-  const allocationRecommendations = aiAnalysis?.allocationRecommendations?.map(
-    (rec) => ({
+  const allocationRecommendations =
+    aiAnalysis?.allocationRecommendations?.map((rec) => ({
       id: rec.medicine,
       medicine: rec.medicine,
       currentStock: rec.currentStock,
       predictedDemand: rec.predictedDemand,
       recommendedAllocation: rec.recommendedAllocation,
       urgency: rec.urgency,
-    }),
-  ) || [
-    {
-      id: "1",
-      medicine: "Amoxicillin",
-      currentStock: 800,
-      predictedDemand: 1200,
-      recommendedAllocation: 500,
-      urgency: "critical" as const,
-    },
-    {
-      id: "2",
-      medicine: "Metformin",
-      currentStock: 1200,
-      predictedDemand: 1800,
-      recommendedAllocation: 700,
-      urgency: "high" as const,
-    },
-    {
-      id: "3",
-      medicine: "Paracetamol",
-      currentStock: 2500,
-      predictedDemand: 3200,
-      recommendedAllocation: 800,
-      urgency: "medium" as const,
-    },
-    {
-      id: "4",
-      medicine: "Ibuprofen",
-      currentStock: 1800,
-      predictedDemand: 2100,
-      recommendedAllocation: 400,
-      urgency: "low" as const,
-    },
-  ];
+    })) || [];
 
-  const comparisonData = aiAnalysis?.comparisonData || [
-    {
-      medicine: "Paracetamol",
-      demand: 3200,
-      supply: 2500,
-      gap: 700,
-    },
-    {
-      medicine: "Amoxicillin",
-      demand: 1200,
-      supply: 800,
-      gap: 400,
-    },
-    {
-      medicine: "Ibuprofen",
-      demand: 2100,
-      supply: 1800,
-      gap: 300,
-    },
-    {
-      medicine: "Metformin",
-      demand: 1800,
-      supply: 1200,
-      gap: 600,
-    },
-  ];
+  const comparisonData = aiAnalysis?.comparisonData || [];
 
-  const stockTrendData = [
-    { week: "W1", stock: 2100, usage: 1800 },
-    { week: "W2", stock: 2300, usage: 2000 },
-    { week: "W3", stock: 2500, usage: 2200 },
-    { week: "W4", stock: 2800, usage: 2400 },
-    { week: "W5", stock: 3000, usage: 2600 },
-  ];
+  const stockTrendData: Array<{ week: string; stock: number; usage: number }> =
+    [];
 
   const getUrgencyColor = (urgency: "critical" | "high" | "medium" | "low") => {
     switch (urgency) {
