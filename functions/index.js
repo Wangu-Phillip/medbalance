@@ -67,10 +67,11 @@ exports.generateStockAnalysis = onRequest(
 
         logger.info("Generating stock analysis for district:", { districtId, districtName });
 
-        // Prepare data summary for Gemini
-        const medicinesSummary = medicines.map(m => 
-          `${m.name}: ${m.quantity} ${m.unit} (Allocated: ${m.allocatedQuantity}, Expiry: ${m.expiryDate})`
-        ).join("\n");
+        // Prepare data summary for Gemini including available quantities
+        const medicinesSummary = medicines.map(m => {
+          const available = m.quantity - (m.allocatedQuantity || 0);
+          return `${m.name}: Total=${m.quantity} ${m.unit}, Allocated=${m.allocatedQuantity || 0} ${m.unit}, Available=${available} ${m.unit}, Expiry=${m.expiryDate}`;
+        }).join("\n");
 
         const facilitiesSummary = facilities.map(f => f.name).join("\n");
 
@@ -78,48 +79,49 @@ exports.generateStockAnalysis = onRequest(
           ? allocations.map(a => `${a.medicineName} → ${a.facilityName}: ${a.amount}`).join("\n")
           : "No allocations yet";
 
-        // Create the prompt for Gemini
+        // Create the prompt for Gemini - CRITICAL: emphasize using ACTUAL data only
         const prompt = `
-You are a healthcare supply chain analyst. Analyze the following medicine inventory and provide:
-1. Demand forecasts for next 6 months
-2. Stock level recommendations
-3. Allocation recommendations with urgency levels
-4. Supply vs demand gap analysis
+You are a healthcare supply chain analyst. Analyze the following ACTUAL medicine inventory data and provide recommendations BASED SOLELY ON THE PROVIDED DATA.
+
+CRITICAL INSTRUCTION: Use ONLY the provided real data from the database. DO NOT make assumptions, assume generic values, or invent monthly demand figures. All analysis MUST be derived from the actual inventory and allocation data provided.
 
 DISTRICT: ${districtName}
 
-CURRENT INVENTORY:
+CURRENT ACTUAL INVENTORY (real data from database):
 ${medicinesSummary}
 
-FACILITIES:
+ACTIVE FACILITIES:
 ${facilitiesSummary}
 
-CURRENT ALLOCATIONS:
+CURRENT ALLOCATIONS (actual records from database):
 ${allocationsSummary}
 
-Please provide your analysis in the following JSON format (respond ONLY with valid JSON, no markdown):
+Use the above ACTUAL DATA to forecast the next 6 months. Base all recommendations on what you see in the current stock levels and allocation patterns. Respond with ONLY valid JSON (no markdown, no explanation):
 {
   "demandForecast": [
-    {"month": "Jan", "demand": number, "forecast": number},
-    {"month": "Feb", "demand": number, "forecast": number},
-    ...6 months total
+    {"month": "Apr", "demand": number, "forecast": number},
+    {"month": "May", "demand": number, "forecast": number},
+    {"month": "Jun", "demand": number, "forecast": number},
+    {"month": "Jul", "demand": number, "forecast": number},
+    {"month": "Aug", "demand": number, "forecast": number},
+    {"month": "Sep", "demand": number, "forecast": number}
   ],
   "stockLevels": [
-    {"medicine": "name", "current": number, "predicted": number, "recommended": number},
-    ...for each medicine
+    {"medicine": "name", "current": current_stock_from_data, "predicted": predicted_stock_level, "recommended": recommended_minimum},
+    (Must include one entry for each medicine listed above in CURRENT ACTUAL INVENTORY)
   ],
   "allocationRecommendations": [
-    {"medicine": "name", "currentStock": number, "predictedDemand": number, "recommendedAllocation": number, "urgency": "critical|high|medium|low", "reason": "string"},
-    ...for each medicine
+    {"medicine": "name", "currentStock": actual_current_quantity, "predictedDemand": projected_demand, "recommendedAllocation": quantity_to_allocate, "urgency": "critical|high|medium|low", "reason": "reason based on actual data provided"},
+    (Must include one entry for each medicine listed above)
   ],
   "comparisonData": [
-    {"medicine": "name", "demand": number, "supply": number, "gap": number},
-    ...for each medicine
+    {"medicine": "name", "demand": projected_demand, "supply": current_stock, "gap": projected_demand_minus_current_stock},
+    (Must include one entry for each medicine)
   ],
   "insights": [
-    "insight 1",
-    "insight 2",
-    ...key insights
+    "Specific insight about the actual stock levels provided",
+    "Insight about allocation patterns based on actual data",
+    "Recommendation based on the real inventory situation"
   ]
 }
 `;

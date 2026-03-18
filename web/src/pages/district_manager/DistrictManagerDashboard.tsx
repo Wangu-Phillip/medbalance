@@ -125,6 +125,11 @@ export default function DistrictManagerDashboard() {
     allocatedQuantity: "",
   });
 
+  // Cache management constants
+  const AI_CACHE_KEY = `ai_analysis_${districtId}`;
+  const CACHE_DURATION_MS = 60 * 60 * 1000; // 1 hour
+  const [lastDataChangeTime, setLastDataChangeTime] = useState<number>(0);
+
   // Redirect if not a district manager
   useEffect(() => {
     if (!authLoading && !districtId) {
@@ -139,12 +144,50 @@ export default function DistrictManagerDashboard() {
     }
   }, [districtId]);
 
-  // Generate AI analysis when data changes
+  // Load cached AI analysis on mount
+  useEffect(() => {
+    if (districtId) {
+      const cachedData = localStorage.getItem(AI_CACHE_KEY);
+      if (cachedData) {
+        try {
+          const { analysis, timestamp } = JSON.parse(cachedData);
+          const isStale = Date.now() - timestamp > CACHE_DURATION_MS;
+          if (!isStale) {
+            setAiAnalysis(analysis);
+            console.log("Loaded AI analysis from cache");
+          } else {
+            localStorage.removeItem(AI_CACHE_KEY);
+          }
+        } catch (err) {
+          console.error("Error loading cached AI analysis:", err);
+          localStorage.removeItem(AI_CACHE_KEY);
+        }
+      }
+    }
+  }, [districtId]);
+
+  // Generate AI analysis only when data meaningfully changes
   useEffect(() => {
     if (medicines.length > 0 && districtId && districtName) {
-      generateAIAnalysis();
+      // Check if we have cached data that's still fresh
+      const cachedData = localStorage.getItem(AI_CACHE_KEY);
+      const hasFreshCache =
+        cachedData &&
+        (() => {
+          try {
+            const { timestamp } = JSON.parse(cachedData);
+            return Date.now() - timestamp <= CACHE_DURATION_MS;
+          } catch {
+            return false;
+          }
+        })();
+
+      // Only regenerate if cache is missing or stale
+      if (!hasFreshCache) {
+        generateAIAnalysis();
+      }
     }
-  }, [medicines, facilities, allocations, districtId]);
+  }, [medicines, facilities, allocations, districtId, districtName]);
 
   const generateAIAnalysis = async () => {
     try {
@@ -162,6 +205,21 @@ export default function DistrictManagerDashboard() {
       );
 
       setAiAnalysis(analysis);
+
+      // Cache the analysis with timestamp
+      try {
+        localStorage.setItem(
+          AI_CACHE_KEY,
+          JSON.stringify({
+            analysis,
+            timestamp: Date.now(),
+          }),
+        );
+        console.log("AI analysis cached successfully");
+      } catch (cacheErr) {
+        console.warn("Failed to cache AI analysis:", cacheErr);
+      }
+
       console.log("AI analysis generated successfully");
     } catch (err) {
       console.error("Error generating AI analysis:", err);
@@ -230,6 +288,10 @@ export default function DistrictManagerDashboard() {
         ...doc.data(),
       })) as MedicineAllocation[];
       setAllocations(allocationsData);
+
+      // Invalidate AI cache on data fetch
+      localStorage.removeItem(AI_CACHE_KEY);
+      setLastDataChangeTime(Date.now());
 
       setError(null);
     } catch (err) {
@@ -602,26 +664,26 @@ export default function DistrictManagerDashboard() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-slate-50">
       {/* Error and Success Messages */}
       {error && (
-        <div className="fixed top-4 right-4 bg-red-500/20 border border-red-500/30 text-red-300 px-4 py-3 rounded-lg">
+        <div className="fixed top-24 right-4 z-50 bg-red-500/20 border border-red-500/30 text-red-300 px-4 py-3 rounded-lg">
           {error}
         </div>
       )}
       {success && (
-        <div className="fixed top-4 right-4 bg-green-500/20 border border-green-500/30 text-green-300 px-4 py-3 rounded-lg">
+        <div className="fixed top-24 right-4 z-50 bg-green-500/20 border border-green-500/30 text-green-300 px-4 py-3 rounded-lg">
           {success}
         </div>
       )}
 
       {/* AI Analysis Status */}
       {aiLoading && (
-        <div className="fixed top-4 left-4 bg-blue-500/20 border border-blue-500/30 text-blue-300 px-4 py-3 rounded-lg flex items-center gap-2">
+        <div className="fixed top-24 right-4 z-50 bg-blue-500/20 border border-blue-500/30 text-blue-300 px-4 py-3 rounded-lg flex items-center gap-2">
           <div className="animate-spin h-4 w-4 border-2 border-blue-300 border-t-transparent rounded-full"></div>
           <span>Generating AI analysis...</span>
         </div>
       )}
 
       {aiError && aiAnalysis === null && (
-        <div className="fixed top-20 left-4 bg-yellow-500/20 border border-yellow-500/30 text-yellow-300 px-4 py-3 rounded-lg">
+        <div className="fixed top-32 right-4 z-50 bg-yellow-500/20 border border-yellow-500/30 text-yellow-300 px-4 py-3 rounded-lg">
           <p className="text-sm">{aiError}</p>
           <p className="text-xs text-yellow-200 mt-1">
             Using default analysis data
@@ -630,7 +692,7 @@ export default function DistrictManagerDashboard() {
       )}
 
       {aiAnalysis && (
-        <div className="fixed top-4 left-4 bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 px-4 py-3 rounded-lg text-sm">
+        <div className="fixed top-24 right-4 z-50 bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 px-4 py-3 rounded-lg text-sm">
           ✓ AI Analysis Ready
         </div>
       )}
