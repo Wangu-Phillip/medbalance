@@ -66,6 +66,19 @@ interface Facility {
   updatedAt?: number;
 }
 
+interface MedicineAllocation {
+  id: string;
+  medicineId: string;
+  medicineName: string;
+  facilityId: string;
+  facilityName: string;
+  allocationType: "quantity" | "percentage";
+  amount: number;
+  districtId: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
 export default function DistrictManagerDashboard() {
   const navigate = useNavigate();
   const { districtId, districtName, loading: authLoading } = useAuth();
@@ -81,13 +94,22 @@ export default function DistrictManagerDashboard() {
   const [loading, setLoading] = useState(true);
   const [medicines, setMedicines] = useState<MedicineRecord[]>([]);
   const [facilities, setFacilities] = useState<Facility[]>([]);
+  const [allocations, setAllocations] = useState<MedicineAllocation[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [savingMedicine, setSavingMedicine] = useState(false);
+  const [savingAllocation, setSavingAllocation] = useState(false);
   const [showAddMedicineModal, setShowAddMedicineModal] = useState(false);
+  const [showAddAllocationModal, setShowAddAllocationModal] = useState(false);
   const [editingMedicine, setEditingMedicine] = useState<MedicineRecord | null>(
     null,
   );
+  const [allocationForm, setAllocationForm] = useState({
+    medicineId: "",
+    facilityId: "",
+    allocationType: "quantity" as "quantity" | "percentage",
+    amount: "",
+  });
   const [newMedicine, setNewMedicine] = useState({
     name: "",
     quantity: "",
@@ -151,6 +173,19 @@ export default function DistrictManagerDashboard() {
         ...doc.data(),
       })) as Facility[];
       setFacilities(facilitiesData);
+
+      // Fetch allocations for this district only
+      const allocationsQuery = query(
+        collection(db, "medicineAllocations"),
+        where("districtId", "==", districtId),
+        orderBy("createdAt", "desc"),
+      );
+      const allocationsSnapshot = await getDocs(allocationsQuery);
+      const allocationsData = allocationsSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as MedicineAllocation[];
+      setAllocations(allocationsData);
 
       setError(null);
     } catch (err) {
@@ -287,6 +322,95 @@ export default function DistrictManagerDashboard() {
     setShowAddMedicineModal(false);
   };
 
+  // Add Allocation
+  const handleAddAllocation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (
+      !allocationForm.medicineId ||
+      !allocationForm.facilityId ||
+      !allocationForm.amount
+    ) {
+      setError("Please fill all allocation fields");
+      return;
+    }
+
+    const amount = parseFloat(allocationForm.amount);
+    if (amount <= 0) {
+      setError("Allocation amount must be greater than 0");
+      return;
+    }
+
+    // Get medicine and facility names
+    const medicine = medicines.find((m) => m.id === allocationForm.medicineId);
+    const facility = facilities.find((f) => f.id === allocationForm.facilityId);
+
+    if (!medicine || !facility) {
+      setError("Selected medicine or facility not found");
+      return;
+    }
+
+    // Validate quantity doesn't exceed available stock
+    if (allocationForm.allocationType === "quantity") {
+      const availableQuantity = medicine.quantity - medicine.allocatedQuantity;
+      if (amount > availableQuantity) {
+        setError(
+          `Cannot allocate more than available quantity (${availableQuantity} available)`,
+        );
+        return;
+      }
+    }
+
+    try {
+      setSavingAllocation(true);
+      const now = Date.now();
+
+      await addDoc(collection(db, "medicineAllocations"), {
+        medicineId: allocationForm.medicineId,
+        medicineName: medicine.name,
+        facilityId: allocationForm.facilityId,
+        facilityName: facility.name,
+        allocationType: allocationForm.allocationType,
+        amount: amount,
+        districtId: districtId,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      setSuccess("Allocation created successfully");
+      setAllocationForm({
+        medicineId: "",
+        facilityId: "",
+        allocationType: "quantity",
+        amount: "",
+      });
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error creating allocation:", err);
+      setError("Failed to create allocation");
+    } finally {
+      setSavingAllocation(false);
+    }
+  };
+
+  // Delete Allocation
+  const handleDeleteAllocation = async (allocationId: string) => {
+    if (!confirm("Are you sure you want to remove this allocation?")) return;
+
+    try {
+      setSavingAllocation(true);
+      await deleteDoc(doc(db, "medicineAllocations", allocationId));
+      setSuccess("Allocation deleted successfully");
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error deleting allocation:", err);
+      setError("Failed to delete allocation");
+    } finally {
+      setSavingAllocation(false);
+    }
+  };
+
   if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center">
@@ -331,7 +455,7 @@ export default function DistrictManagerDashboard() {
     },
   ];
 
-  const allocations: AllocationRecommendation[] = [
+  const allocationRecommendations: AllocationRecommendation[] = [
     {
       id: "1",
       medicine: "Amoxicillin",
@@ -542,6 +666,140 @@ export default function DistrictManagerDashboard() {
         </div>
       )}
 
+      {/* Add Allocation Modal */}
+      {showAddAllocationModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-slate-800 border border-cyan-500/20 rounded-xl p-6 max-w-2xl w-full mx-4">
+            <h3 className="text-lg font-semibold text-cyan-400 mb-4">
+              Create Allocation
+            </h3>
+            <form onSubmit={handleAddAllocation} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Medicine
+                  </label>
+                  <select
+                    value={allocationForm.medicineId}
+                    onChange={(e) =>
+                      setAllocationForm({
+                        ...allocationForm,
+                        medicineId: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                  >
+                    <option value="">Select a medicine</option>
+                    {medicines.map((medicine) => (
+                      <option key={medicine.id} value={medicine.id}>
+                        {medicine.name} (
+                        {medicine.quantity - medicine.allocatedQuantity}{" "}
+                        {medicine.unit} available)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Facility
+                  </label>
+                  <select
+                    value={allocationForm.facilityId}
+                    onChange={(e) =>
+                      setAllocationForm({
+                        ...allocationForm,
+                        facilityId: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                  >
+                    <option value="">Select a facility</option>
+                    {facilities
+                      .filter((f) => f.status === "active")
+                      .map((facility) => (
+                        <option key={facility.id} value={facility.id}>
+                          {facility.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Allocation Type
+                  </label>
+                  <select
+                    value={allocationForm.allocationType}
+                    onChange={(e) =>
+                      setAllocationForm({
+                        ...allocationForm,
+                        allocationType: e.target.value as
+                          | "quantity"
+                          | "percentage",
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                  >
+                    <option value="quantity">Quantity</option>
+                    <option value="percentage">Percentage</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Amount (
+                    {allocationForm.allocationType === "percentage"
+                      ? "%"
+                      : "units"}
+                    )
+                  </label>
+                  <input
+                    type="number"
+                    value={allocationForm.amount}
+                    onChange={(e) =>
+                      setAllocationForm({
+                        ...allocationForm,
+                        amount: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                    placeholder="Enter amount"
+                    step="0.01"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="submit"
+                  disabled={savingAllocation}
+                  className="flex-1 px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-slate-900 font-semibold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {savingAllocation ? "Creating..." : "Create Allocation"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddAllocationModal(false);
+                    setAllocationForm({
+                      medicineId: "",
+                      facilityId: "",
+                      allocationType: "quantity",
+                      amount: "",
+                    });
+                  }}
+                  disabled={savingAllocation}
+                  className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="sticky top-0 z-40 border-b border-cyan-500/10 bg-slate-900/80 backdrop-blur-md px-6 py-4">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
@@ -687,7 +945,7 @@ export default function DistrictManagerDashboard() {
                 Latest Recommendations
               </h3>
               <div className="space-y-3">
-                {allocations.slice(0, 3).map((item) => (
+                {allocationRecommendations.slice(0, 3).map((item) => (
                   <div
                     key={item.id}
                     className="p-4 rounded-lg bg-slate-900/50 border border-cyan-500/10 flex justify-between items-center"
@@ -951,6 +1209,76 @@ export default function DistrictManagerDashboard() {
         {/* Allocations Tab */}
         {activeTab === "allocation" && (
           <div className="space-y-6">
+            {/* Create Allocation Button */}
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowAddAllocationModal(true)}
+                className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-slate-900 font-semibold rounded-lg transition-all"
+              >
+                + Create Allocation
+              </button>
+            </div>
+
+            {/* Active Allocations */}
+            <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
+              <h3 className="text-lg font-semibold mb-4">Active Allocations</h3>
+              {allocations.length === 0 ? (
+                <div className="text-center py-8 text-slate-400">
+                  No allocations created yet. Click the "Create Allocation"
+                  button to get started.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {allocations.map((allocation) => (
+                    <div
+                      key={allocation.id}
+                      className="p-4 rounded-lg bg-slate-900/50 border border-cyan-500/10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
+                    >
+                      <div className="flex-1">
+                        <p className="font-semibold text-cyan-400">
+                          {allocation.medicineName}
+                        </p>
+                        <div className="mt-2 grid grid-cols-3 gap-4 text-sm">
+                          <div>
+                            <p className="text-slate-400 text-xs mb-1">
+                              Facility
+                            </p>
+                            <p className="text-slate-200">
+                              {allocation.facilityName}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-slate-400 text-xs mb-1">
+                              Allocated
+                            </p>
+                            <p className="text-slate-200 font-semibold">
+                              {allocation.amount}{" "}
+                              {allocation.allocationType === "percentage"
+                                ? "%"
+                                : "units"}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-slate-400 text-xs mb-1">Type</p>
+                            <p className="text-emerald-400 font-semibold capitalize">
+                              {allocation.allocationType}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteAllocation(allocation.id)}
+                        disabled={savingAllocation}
+                        className="px-4 py-2 bg-red-500/20 text-red-300 rounded-lg hover:bg-red-500/30 transition-all font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="flex justify-between items-center">
               <h3 className="text-lg font-semibold">
                 Allocation Recommendations
@@ -964,7 +1292,7 @@ export default function DistrictManagerDashboard() {
             </div>
 
             <div className="space-y-3">
-              {allocations.map((item) => (
+              {allocationRecommendations.map((item) => (
                 <div
                   key={item.id}
                   className={`p-5 rounded-lg border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 ${getUrgencyColor(
