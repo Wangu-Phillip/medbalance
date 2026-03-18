@@ -93,15 +93,26 @@ interface FacilityManager {
   updatedAt?: number;
 }
 
+interface Facility {
+  id: string;
+  name: string;
+  districtId: string;
+  districtName: string;
+  status: "active" | "inactive";
+  createdAt?: number;
+  updatedAt?: number;
+}
+
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<
-    "overview" | "medicines" | "districts" | "managers" | "data"
+    "overview" | "medicines" | "districts" | "facilities" | "managers" | "data"
   >("overview");
   const [loggingOut, setLoggingOut] = useState(false);
   const [loading, setLoading] = useState(true);
   const [medicines, setMedicines] = useState<MedicineRecord[]>([]);
   const [districts, setDistricts] = useState<District[]>([]);
+  const [facilities, setFacilities] = useState<Facility[]>([]);
   const [managers, setManagers] = useState<Manager[]>([]);
   const [facilityManagers, setFacilityManagers] = useState<FacilityManager[]>(
     [],
@@ -111,6 +122,7 @@ export default function AdminDashboard() {
     null,
   );
   const [editingDistrict, setEditingDistrict] = useState<District | null>(null);
+  const [editingFacility, setEditingFacility] = useState<Facility | null>(null);
   const [editingManager, setEditingManager] = useState<Manager | null>(null);
   const [editingFacilityManager, setEditingFacilityManager] =
     useState<FacilityManager | null>(null);
@@ -120,6 +132,7 @@ export default function AdminDashboard() {
   const [exporting, setExporting] = useState(false);
   const [savingMedicine, setSavingMedicine] = useState(false);
   const [savingDistrict, setSavingDistrict] = useState(false);
+  const [savingFacility, setSavingFacility] = useState(false);
   const [savingManager, setSavingManager] = useState(false);
   const [showMedicineDatePicker, setShowMedicineDatePicker] = useState(false);
   const [showDistrictDatePicker, setShowDistrictDatePicker] = useState(false);
@@ -144,6 +157,10 @@ export default function AdminDashboard() {
     districtId: "",
   });
   const [newDistrict, setNewDistrict] = useState({ name: "", facilities: "" });
+  const [newFacility, setNewFacility] = useState({
+    name: "",
+    districtId: "",
+  });
   const [newManager, setNewManager] = useState({
     name: "",
     email: "",
@@ -193,6 +210,16 @@ export default function AdminDashboard() {
         ...doc.data(),
       })) as District[];
       setDistricts(districtsData);
+
+      // Fetch facilities
+      const facilitiesSnapshot = await getDocs(
+        query(collection(db, "facilities"), orderBy("createdAt", "desc")),
+      );
+      const facilitiesData = facilitiesSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Facility[];
+      setFacilities(facilitiesData);
 
       // Fetch managers
       const managersSnapshot = await getDocs(
@@ -640,6 +667,106 @@ export default function AdminDashboard() {
     }
   };
 
+  // Add Facility
+  const handleAddFacility = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFacility.name || !newFacility.districtId) {
+      setError("Please fill all facility fields and select a district");
+      return;
+    }
+
+    try {
+      setSavingFacility(true);
+      const now = Date.now();
+      const districtName =
+        districts.find((d) => d.id === newFacility.districtId)?.name || "";
+
+      if (editingFacility) {
+        // Update existing facility
+        await updateDoc(doc(db, "facilities", editingFacility.id), {
+          name: newFacility.name,
+          districtId: newFacility.districtId,
+          districtName: districtName,
+          updatedAt: now,
+        });
+        setSuccess("Facility updated successfully");
+        setEditingFacility(null);
+      } else {
+        // Add new facility
+        await addDoc(collection(db, "facilities"), {
+          name: newFacility.name,
+          districtId: newFacility.districtId,
+          districtName: districtName,
+          status: "active",
+          createdAt: now,
+          updatedAt: now,
+        });
+        setSuccess("Facility added successfully");
+      }
+      setNewFacility({ name: "", districtId: "" });
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error adding/updating facility:", err);
+      setError("Failed to add/update facility");
+    } finally {
+      setSavingFacility(false);
+    }
+  };
+
+  // Delete Facility
+  const handleDeleteFacility = async (facilityId: string) => {
+    if (!confirm("Are you sure you want to delete this facility?")) return;
+
+    try {
+      setSavingFacility(true);
+      await deleteDoc(doc(db, "facilities", facilityId));
+      setSuccess("Facility deleted successfully");
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error deleting facility:", err);
+      setError("Failed to delete facility");
+    } finally {
+      setSavingFacility(false);
+    }
+  };
+
+  // Edit Facility
+  const handleEditFacility = (facility: Facility) => {
+    setEditingFacility(facility);
+    setNewFacility({
+      name: facility.name,
+      districtId: facility.districtId,
+    });
+  };
+
+  // Cancel Edit Facility
+  const handleCancelEditFacility = () => {
+    setEditingFacility(null);
+    setNewFacility({ name: "", districtId: "" });
+  };
+
+  // Toggle Facility Status
+  const handleToggleFacilityStatus = async (facility: Facility) => {
+    try {
+      setSavingFacility(true);
+      const newStatus = facility.status === "active" ? "inactive" : "active";
+      await updateDoc(doc(db, "facilities", facility.id), {
+        status: newStatus,
+        updatedAt: Date.now(),
+      });
+      setSuccess(`Facility marked as ${newStatus}`);
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error updating facility status:", err);
+      setError("Failed to update facility status");
+    } finally {
+      setSavingFacility(false);
+    }
+  };
+
   // Add Manager
   const handleAddManager = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1039,6 +1166,7 @@ export default function AdminDashboard() {
             { key: "overview", label: "Overview" },
             { key: "medicines", label: "Medicines" },
             { key: "districts", label: "Districts" },
+            { key: "facilities", label: "Facilities" },
             { key: "managers", label: "Managers" },
             { key: "data", label: "Data Management" },
           ].map((tab) => (
@@ -1050,6 +1178,7 @@ export default function AdminDashboard() {
                     | "overview"
                     | "medicines"
                     | "districts"
+                    | "facilities"
                     | "managers"
                     | "data",
                 )
@@ -1847,6 +1976,163 @@ export default function AdminDashboard() {
                                   handleDeleteDistrict(district.id)
                                 }
                                 disabled={savingDistrict}
+                                className="text-red-400 hover:text-red-300 text-sm px-2 py-1 rounded bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Facilities Tab */}
+            {activeTab === "facilities" && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Add Facility Form */}
+                  <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
+                    <h3 className="text-lg font-semibold mb-4">
+                      {editingFacility ? "Edit Facility" : "Add New Facility"}
+                    </h3>
+                    <form onSubmit={handleAddFacility} className="space-y-4">
+                      <input
+                        type="text"
+                        placeholder="Facility Name"
+                        value={newFacility.name}
+                        onChange={(e) =>
+                          setNewFacility({
+                            ...newFacility,
+                            name: e.target.value,
+                          })
+                        }
+                        disabled={savingFacility}
+                        className="w-full px-3 py-2 bg-slate-900/50 border border-cyan-500/20 rounded-lg text-slate-50 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                      />
+                      <select
+                        value={newFacility.districtId}
+                        onChange={(e) =>
+                          setNewFacility({
+                            ...newFacility,
+                            districtId: e.target.value,
+                          })
+                        }
+                        disabled={savingFacility}
+                        className="w-full px-3 py-2 bg-slate-900/50 border border-cyan-500/20 rounded-lg text-slate-50 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <option value="">Select a district</option>
+                        {districts.map((district) => (
+                          <option key={district.id} value={district.id}>
+                            {district.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="submit"
+                        disabled={savingFacility}
+                        className="w-full py-2 bg-gradient-to-r from-cyan-500 to-cyan-400 hover:from-cyan-600 hover:to-cyan-500 text-slate-900 font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {savingFacility ? (
+                          <>
+                            <span className="inline-block animate-spin">
+                              <svg
+                                className="w-4 h-4"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M12 4v16m8-8H4"
+                                />
+                              </svg>
+                            </span>
+                            Saving...
+                          </>
+                        ) : editingFacility ? (
+                          "Update Facility"
+                        ) : (
+                          "Add Facility"
+                        )}
+                      </button>
+                      {editingFacility && (
+                        <button
+                          type="button"
+                          onClick={handleCancelEditFacility}
+                          disabled={savingFacility}
+                          className="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-50 font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </form>
+                  </div>
+
+                  {/* Facilities Grid */}
+                  <div className="lg:col-span-2">
+                    {facilities.length === 0 ? (
+                      <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60 text-center">
+                        <p className="text-slate-400">
+                          No facilities added yet
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {facilities.map((facility) => (
+                          <div
+                            key={facility.id}
+                            className={`p-4 rounded-lg border transition-all ${
+                              editingFacility?.id === facility.id
+                                ? "border-cyan-400 bg-cyan-500/10 bg-gradient-to-br from-cyan-500/10 to-slate-900/60"
+                                : "border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60 hover:border-cyan-400"
+                            }`}
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <div>
+                                <h4 className="font-semibold text-cyan-400">
+                                  {facility.name}
+                                </h4>
+                                <p className="text-xs text-slate-400 mt-1">
+                                  {facility.districtName}
+                                </p>
+                              </div>
+                              <span
+                                className={`px-2 py-1 rounded text-xs font-semibold cursor-pointer transition-all ${
+                                  facility.status === "active"
+                                    ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+                                    : "bg-slate-500/20 text-slate-300 hover:bg-slate-500/30"
+                                } ${
+                                  savingFacility
+                                    ? "opacity-50 cursor-not-allowed pointer-events-none"
+                                    : ""
+                                }`}
+                                onClick={() =>
+                                  !savingFacility &&
+                                  handleToggleFacilityStatus(facility)
+                                }
+                              >
+                                {facility.status}
+                              </span>
+                            </div>
+                            <div className="flex gap-2 mt-3">
+                              <button
+                                onClick={() => handleEditFacility(facility)}
+                                disabled={savingFacility}
+                                className="text-cyan-400 hover:text-cyan-300 text-sm px-2 py-1 rounded bg-cyan-500/10 hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() =>
+                                  handleDeleteFacility(facility.id)
+                                }
+                                disabled={savingFacility}
                                 className="text-red-400 hover:text-red-300 text-sm px-2 py-1 rounded bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
                                 Delete
