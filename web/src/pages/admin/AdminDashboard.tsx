@@ -439,13 +439,7 @@ export default function AdminDashboard() {
 
   // Get available facilities for a district
   const getDistrictFacilities = (districtId: string) => {
-    const districtFacilityManagers = facilityManagers.filter(
-      (fm) => fm.districtId === districtId,
-    );
-    // Return unique facilities from facility managers
-    return Array.from(
-      new Map(districtFacilityManagers.map((fm) => [fm.facility, fm])).values(),
-    );
+    return facilities.filter((f) => f.districtId === districtId);
   };
 
   // Calculate allocated quantity for a medicine
@@ -484,11 +478,11 @@ export default function AdminDashboard() {
         return;
       }
 
-      const facilityManager = facilityManagers.find(
-        (fm) => fm.id === allocationForm.facilityId,
+      const facility = facilities.find(
+        (f) => f.id === allocationForm.facilityId,
       );
-      if (!facilityManager) {
-        setError("Facility manager not found");
+      if (!facility) {
+        setError("Facility not found");
         return;
       }
 
@@ -514,7 +508,7 @@ export default function AdminDashboard() {
       await addDoc(collection(db, "medicineAllocations"), {
         medicineId: allocationForm.medicineId,
         facilityId: allocationForm.facilityId,
-        facilityName: facilityManager.facility,
+        facilityName: facility.name,
         allocationType: allocationForm.allocationType,
         amount: parseFloat(allocationForm.amount),
         createdAt: Date.now(),
@@ -1698,12 +1692,12 @@ export default function AdminDashboard() {
                                               </option>
                                               {getDistrictFacilities(
                                                 district.id,
-                                              ).map((fm) => (
+                                              ).map((facility) => (
                                                 <option
-                                                  key={fm.id}
-                                                  value={fm.id}
+                                                  key={facility.id}
+                                                  value={facility.id}
                                                 >
-                                                  {fm.facility}
+                                                  {facility.name}
                                                 </option>
                                               ))}
                                             </select>
@@ -2372,9 +2366,7 @@ export default function AdminDashboard() {
                             </option>
                           ))}
                         </select>
-                        <input
-                          type="text"
-                          placeholder="Facility Name"
+                        <select
                           value={newFacilityManager.facility}
                           onChange={(e) =>
                             setNewFacilityManager({
@@ -2382,9 +2374,21 @@ export default function AdminDashboard() {
                               facility: e.target.value,
                             })
                           }
-                          disabled={savingManager}
-                          className="w-full px-3 py-2 bg-slate-900/50 border border-cyan-500/20 rounded-lg text-slate-50 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
-                        />
+                          disabled={
+                            savingManager || !newFacilityManager.districtId
+                          }
+                          className="w-full px-3 py-2 bg-slate-900/50 border border-cyan-500/20 rounded-lg text-slate-50 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <option value="">Select Facility</option>
+                          {newFacilityManager.districtId &&
+                            getDistrictFacilities(
+                              newFacilityManager.districtId,
+                            ).map((facility) => (
+                              <option key={facility.id} value={facility.name}>
+                                {facility.name}
+                              </option>
+                            ))}
+                        </select>
                         <button
                           type="submit"
                           disabled={savingManager}
