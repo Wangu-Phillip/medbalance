@@ -1089,16 +1089,96 @@ export default function AdminDashboard() {
     }
   };
 
-  const medicineDistributionData = medicines.map((medicine) => ({
-    name: medicine.name,
-    value: medicine.quantity,
-  }));
+  // Helper function to count medicines expiring soon (within 30 days)
+  const getMedicinesExpiringsoon = () => {
+    const today = new Date();
+    const thirtyDaysFromNow = new Date(
+      today.getTime() + 30 * 24 * 60 * 60 * 1000,
+    );
+    return medicines.filter((medicine) => {
+      const expiryDate = new Date(medicine.expiryDate);
+      return expiryDate <= thirtyDaysFromNow && expiryDate >= today;
+    }).length;
+  };
 
-  const districtCapacityData = districts.map((district) => ({
-    name: district.name,
-    capacity: 100,
-    current: (Math.random() * 100) | 0,
-  }));
+  // Helper function to calculate total allocated quantity
+  const getTotalAllocatedQuantity = () => {
+    let total = 0;
+    allocations.forEach((alloc) => {
+      if (alloc.allocationType === "quantity") {
+        total += alloc.amount;
+      } else if (alloc.allocationType === "percentage") {
+        const medicine = medicines.find((m) => m.id === alloc.medicineId);
+        if (medicine) {
+          total += (medicine.quantity * alloc.amount) / 100;
+        }
+      }
+    });
+    return Math.round(total);
+  };
+
+  // Helper function to calculate district stock by summing all medicines in that district
+  const getDistrictStock = (districtId: string) => {
+    return medicines
+      .filter((m) => m.districtId === districtId)
+      .reduce((sum, m) => sum + m.quantity, 0);
+  };
+
+  // Helper function to calculate allocated quantity for a district
+  const getDistrictAllocatedQuantity = (districtId: string) => {
+    const districtMedicines = medicines.filter(
+      (m) => m.districtId === districtId,
+    );
+    let allocated = 0;
+    allocations.forEach((alloc) => {
+      const medicine = districtMedicines.find((m) => m.id === alloc.medicineId);
+      if (medicine) {
+        if (alloc.allocationType === "quantity") {
+          allocated += alloc.amount;
+        } else if (alloc.allocationType === "percentage") {
+          allocated += (medicine.quantity * alloc.amount) / 100;
+        }
+      }
+    });
+    return Math.round(allocated);
+  };
+
+  // Helper function to calculate allocated quantity for a specific medicine
+  const getMedicineAllocatedQuantity = (medicineId: string) => {
+    let allocated = 0;
+    allocations.forEach((alloc) => {
+      if (alloc.medicineId === medicineId) {
+        if (alloc.allocationType === "quantity") {
+          allocated += alloc.amount;
+        } else if (alloc.allocationType === "percentage") {
+          const medicine = medicines.find((m) => m.id === medicineId);
+          if (medicine) {
+            allocated += (medicine.quantity * alloc.amount) / 100;
+          }
+        }
+      }
+    });
+    return Math.round(allocated);
+  };
+
+  const medicineDistributionData = medicines.map((medicine) => {
+    const allocated = getMedicineAllocatedQuantity(medicine.id);
+    return {
+      name: medicine.name,
+      value: Math.max(0, medicine.quantity - allocated),
+    };
+  });
+
+  const districtCapacityData = districts.map((district) => {
+    const totalStock = getDistrictStock(district.id);
+    const allocatedQuantity = getDistrictAllocatedQuantity(district.id);
+    return {
+      name: district.name,
+      "Total Stock": totalStock,
+      Allocated: allocatedQuantity,
+      Available: Math.max(0, totalStock - allocatedQuantity),
+    };
+  });
 
   const colors = ["#06B6D4", "#14B8A6", "#F59E0B", "#EF4444"];
 
@@ -1206,7 +1286,7 @@ export default function AdminDashboard() {
             {activeTab === "overview" && (
               <div className="space-y-8">
                 {/* Stats Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
                     <div className="text-slate-400 text-sm mb-2">
                       Total Medicines
@@ -1233,11 +1313,33 @@ export default function AdminDashboard() {
                   </div>
                   <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
                     <div className="text-slate-400 text-sm mb-2">
-                      Total Units
+                      Total Units in Stock
                     </div>
                     <div className="text-3xl font-bold text-cyan-400">
                       {medicines.reduce((sum, m) => sum + m.quantity, 0)}
                     </div>
+                  </div>
+                  <div className="p-6 rounded-xl border border-orange-500/20 bg-gradient-to-br from-orange-900/20 to-slate-900/60">
+                    <div className="text-slate-400 text-sm mb-2">
+                      Expiring Soon (30 days)
+                    </div>
+                    <div className="text-3xl font-bold text-orange-400">
+                      {getMedicinesExpiringsoon()}
+                    </div>
+                    <p className="text-xs text-slate-500 mt-2">
+                      Medicines to review
+                    </p>
+                  </div>
+                  <div className="p-6 rounded-xl border border-teal-500/20 bg-gradient-to-br from-teal-900/20 to-slate-900/60">
+                    <div className="text-slate-400 text-sm mb-2">
+                      Total Allocated Units
+                    </div>
+                    <div className="text-3xl font-bold text-teal-400">
+                      {getTotalAllocatedQuantity()}
+                    </div>
+                    <p className="text-xs text-slate-500 mt-2">
+                      {allocations.length} allocations
+                    </p>
                   </div>
                 </div>
 
@@ -1276,7 +1378,7 @@ export default function AdminDashboard() {
 
                     <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
                       <h3 className="text-lg font-semibold mb-4">
-                        District Capacity vs Current Stock
+                        District Stock Overview
                       </h3>
                       <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={districtCapacityData}>
@@ -1296,10 +1398,12 @@ export default function AdminDashboard() {
                               border: "1px solid rgba(6, 182, 212, 0.2)",
                               borderRadius: "8px",
                             }}
+                            formatter={(value) => value.toLocaleString()}
                           />
                           <Legend />
-                          <Bar dataKey="capacity" fill="#06B6D4" />
-                          <Bar dataKey="current" fill="#14B8A6" />
+                          <Bar dataKey="Total Stock" fill="#06B6D4" />
+                          <Bar dataKey="Allocated" fill="#F59E0B" />
+                          <Bar dataKey="Available" fill="#14B8A6" />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
