@@ -1,6 +1,10 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { signOut } from "firebase/auth";
+import {
+  signOut,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+} from "firebase/auth";
 import { auth, db, storage } from "../../firebaseConfig";
 import {
   collection,
@@ -11,6 +15,7 @@ import {
   getDocs,
   query,
   orderBy,
+  setDoc,
 } from "firebase/firestore";
 import {
   ref,
@@ -52,27 +57,60 @@ interface District {
   updatedAt?: number;
 }
 
+interface Manager {
+  id: string;
+  name: string;
+  email: string;
+  uid?: string;
+  districtId: string;
+  districtName: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+interface FacilityManager {
+  id: string;
+  name: string;
+  email: string;
+  uid?: string;
+  districtId: string;
+  districtName: string;
+  facility: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<
-    "overview" | "medicines" | "districts" | "data"
+    "overview" | "medicines" | "districts" | "managers" | "data"
   >("overview");
   const [loggingOut, setLoggingOut] = useState(false);
   const [loading, setLoading] = useState(true);
   const [medicines, setMedicines] = useState<MedicineRecord[]>([]);
   const [districts, setDistricts] = useState<District[]>([]);
+  const [managers, setManagers] = useState<Manager[]>([]);
+  const [facilityManagers, setFacilityManagers] = useState<FacilityManager[]>(
+    [],
+  );
   const [editingMedicine, setEditingMedicine] = useState<MedicineRecord | null>(
     null,
   );
   const [editingDistrict, setEditingDistrict] = useState<District | null>(null);
+  const [editingManager, setEditingManager] = useState<Manager | null>(null);
+  const [editingFacilityManager, setEditingFacilityManager] =
+    useState<FacilityManager | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [savingMedicine, setSavingMedicine] = useState(false);
   const [savingDistrict, setSavingDistrict] = useState(false);
+  const [savingManager, setSavingManager] = useState(false);
   const [showMedicineDatePicker, setShowMedicineDatePicker] = useState(false);
   const [showDistrictDatePicker, setShowDistrictDatePicker] = useState(false);
+  const [adminEmail, setAdminEmail] = useState<string | null>(null);
+  const [adminPassword, setAdminPassword] = useState<string | null>(null);
 
   const [newMedicine, setNewMedicine] = useState({
     name: "",
@@ -81,6 +119,17 @@ export default function AdminDashboard() {
     expiryDate: "",
   });
   const [newDistrict, setNewDistrict] = useState({ name: "", facilities: "" });
+  const [newManager, setNewManager] = useState({
+    name: "",
+    email: "",
+    districtId: "",
+  });
+  const [newFacilityManager, setNewFacilityManager] = useState({
+    name: "",
+    email: "",
+    districtId: "",
+    facility: "",
+  });
 
   // Fetch medicines and districts from Firestore
   useEffect(() => {
@@ -110,12 +159,105 @@ export default function AdminDashboard() {
       })) as District[];
       setDistricts(districtsData);
 
+      // Fetch managers
+      const managersSnapshot = await getDocs(
+        query(collection(db, "managers"), orderBy("createdAt", "desc")),
+      );
+      const managersData = managersSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Manager[];
+      setManagers(managersData);
+
+      // Fetch facility managers
+      const facilityManagersSnapshot = await getDocs(
+        query(collection(db, "facilityManagers"), orderBy("createdAt", "desc")),
+      );
+      const facilityManagersData = facilityManagersSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as FacilityManager[];
+      setFacilityManagers(facilityManagersData);
+
       setError(null);
     } catch (err) {
       console.error("Error fetching data:", err);
       setError("Failed to load data from database");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Helper function to create user account and save to users collection
+  const createUserAccount = async (
+    email: string,
+    role: "district_manager" | "facility_manager",
+  ): Promise<string | null> => {
+    try {
+      // Get current admin user first (before any auth changes)
+      const currentAdmin = auth.currentUser;
+      if (!currentAdmin) {
+        setError("You must be logged in as admin to create user accounts");
+        return null;
+      }
+
+      // Get admin credentials if not already stored
+      let adminEmailToUse = adminEmail;
+      let adminPasswordToUse = adminPassword;
+
+      if (!adminEmailToUse || !adminPasswordToUse) {
+        const adminEmailPrompt = prompt(
+          "Enter your admin email to restore session after creating user:",
+        );
+        const adminPasswordPrompt = prompt("Enter your admin password:");
+
+        if (!adminEmailPrompt || !adminPasswordPrompt) {
+          setError("Admin credentials required to create user accounts");
+          return null;
+        }
+
+        adminEmailToUse = adminEmailPrompt;
+        adminPasswordToUse = adminPasswordPrompt;
+        setAdminEmail(adminEmailPrompt);
+        setAdminPassword(adminPasswordPrompt);
+      }
+
+      // Create new user account with default password
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        email,
+        "Password1.",
+      );
+
+      const uid = userCredential.user.uid;
+
+      // Immediately sign back in as admin before saving to Firestore
+      await signInWithEmailAndPassword(
+        auth,
+        adminEmailToUse,
+        adminPasswordToUse,
+      );
+
+      // Now save user to users collection with role (uid as document ID) - as admin
+      await setDoc(doc(db, "users", uid), {
+        email: email,
+        role: role,
+        createdAt: Date.now(),
+      });
+
+      return uid;
+    } catch (err: any) {
+      console.error("Error creating user account:", err);
+      if (err.code === "auth/email-already-in-use") {
+        setError("Email already in use. Please use a different email.");
+      } else if (err.code === "auth/weak-password") {
+        setError("Password is too weak.");
+      } else if (err.code === "auth/invalid-email") {
+        setError("Invalid email format.");
+      } else {
+        setError("Failed to create user account. Please try again.");
+      }
+      return null;
     }
   };
 
@@ -313,6 +455,241 @@ export default function AdminDashboard() {
     }
   };
 
+  // Add Manager
+  const handleAddManager = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newManager.name || !newManager.email || !newManager.districtId) {
+      setError("Please fill all manager fields and select a district");
+      return;
+    }
+
+    // Check if district already has a manager
+    const existingManager = managers.find(
+      (m) => m.districtId === newManager.districtId,
+    );
+    if (existingManager && !editingManager) {
+      setError(
+        "This district already has a manager. Only 1 manager per district allowed.",
+      );
+      return;
+    }
+
+    try {
+      setSavingManager(true);
+      const districtName =
+        districts.find((d) => d.id === newManager.districtId)?.name || "";
+      const now = Date.now();
+
+      if (editingManager) {
+        // Update existing manager (no auth changes)
+        await updateDoc(doc(db, "managers", editingManager.id), {
+          name: newManager.name,
+          email: newManager.email,
+          districtId: newManager.districtId,
+          districtName: districtName,
+          updatedAt: now,
+        });
+        setSuccess("Manager updated successfully");
+        setEditingManager(null);
+      } else {
+        // Create new manager - first create auth account
+        const uid = await createUserAccount(
+          newManager.email,
+          "district_manager",
+        );
+        if (!uid) {
+          setSavingManager(false);
+          return;
+        }
+
+        // Add manager document to managers collection
+        await addDoc(collection(db, "managers"), {
+          name: newManager.name,
+          email: newManager.email,
+          uid: uid,
+          districtId: newManager.districtId,
+          districtName: districtName,
+          createdAt: now,
+          updatedAt: now,
+        });
+        setSuccess("Manager added successfully. Default password: Password1.");
+      }
+      setNewManager({ name: "", email: "", districtId: "" });
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error adding/updating manager:", err);
+      setError("Failed to add/update manager");
+    } finally {
+      setSavingManager(false);
+    }
+  };
+
+  // Delete Manager
+  const handleDeleteManager = async (managerId: string) => {
+    if (!confirm("Are you sure you want to delete this manager?")) return;
+
+    try {
+      setSavingManager(true);
+      await deleteDoc(doc(db, "managers", managerId));
+      setSuccess("Manager deleted successfully");
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error deleting manager:", err);
+      setError("Failed to delete manager");
+    } finally {
+      setSavingManager(false);
+    }
+  };
+
+  // Edit Manager
+  const handleEditManager = (manager: Manager) => {
+    setEditingManager(manager);
+    setNewManager({
+      name: manager.name,
+      email: manager.email,
+      districtId: manager.districtId,
+    });
+  };
+
+  // Cancel Edit Manager
+  const handleCancelEditManager = () => {
+    setEditingManager(null);
+    setNewManager({ name: "", email: "", districtId: "" });
+  };
+
+  // Add Facility Manager
+  const handleAddFacilityManager = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (
+      !newFacilityManager.name ||
+      !newFacilityManager.email ||
+      !newFacilityManager.districtId ||
+      !newFacilityManager.facility
+    ) {
+      setError("Please fill all facility manager fields");
+      return;
+    }
+
+    // Check if facility already has a manager
+    const existingFacilityManager = facilityManagers.find(
+      (fm) =>
+        fm.districtId === newFacilityManager.districtId &&
+        fm.facility === newFacilityManager.facility,
+    );
+    if (existingFacilityManager && !editingFacilityManager) {
+      setError(
+        "This facility already has a manager. Only 1 facility manager per facility allowed.",
+      );
+      return;
+    }
+
+    try {
+      setSavingManager(true);
+      const districtName =
+        districts.find((d) => d.id === newFacilityManager.districtId)?.name ||
+        "";
+      const now = Date.now();
+
+      if (editingFacilityManager) {
+        // Update existing facility manager (no auth changes)
+        await updateDoc(
+          doc(db, "facilityManagers", editingFacilityManager.id),
+          {
+            name: newFacilityManager.name,
+            email: newFacilityManager.email,
+            districtId: newFacilityManager.districtId,
+            districtName: districtName,
+            facility: newFacilityManager.facility,
+            updatedAt: now,
+          },
+        );
+        setSuccess("Facility manager updated successfully");
+        setEditingFacilityManager(null);
+      } else {
+        // Create new facility manager - first create auth account
+        const uid = await createUserAccount(
+          newFacilityManager.email,
+          "facility_manager",
+        );
+        if (!uid) {
+          setSavingManager(false);
+          return;
+        }
+
+        // Add facility manager document to facilityManagers collection
+        await addDoc(collection(db, "facilityManagers"), {
+          name: newFacilityManager.name,
+          email: newFacilityManager.email,
+          uid: uid,
+          districtId: newFacilityManager.districtId,
+          districtName: districtName,
+          facility: newFacilityManager.facility,
+          createdAt: now,
+          updatedAt: now,
+        });
+        setSuccess(
+          "Facility manager added successfully. Default password: Password1.",
+        );
+      }
+      setNewFacilityManager({
+        name: "",
+        email: "",
+        districtId: "",
+        facility: "",
+      });
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error adding/updating facility manager:", err);
+      setError("Failed to add/update facility manager");
+    } finally {
+      setSavingManager(false);
+    }
+  };
+
+  // Delete Facility Manager
+  const handleDeleteFacilityManager = async (facilityManagerId: string) => {
+    if (!confirm("Are you sure you want to delete this facility manager?"))
+      return;
+
+    try {
+      setSavingManager(true);
+      await deleteDoc(doc(db, "facilityManagers", facilityManagerId));
+      setSuccess("Facility manager deleted successfully");
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error deleting facility manager:", err);
+      setError("Failed to delete facility manager");
+    } finally {
+      setSavingManager(false);
+    }
+  };
+
+  // Edit Facility Manager
+  const handleEditFacilityManager = (facilityManager: FacilityManager) => {
+    setEditingFacilityManager(facilityManager);
+    setNewFacilityManager({
+      name: facilityManager.name,
+      email: facilityManager.email,
+      districtId: facilityManager.districtId,
+      facility: facilityManager.facility,
+    });
+  };
+
+  // Cancel Edit Facility Manager
+  const handleCancelEditFacilityManager = () => {
+    setEditingFacilityManager(null);
+    setNewFacilityManager({
+      name: "",
+      email: "",
+      districtId: "",
+      facility: "",
+    });
+  };
+
   // Import Data
   const handleImportData = async (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -477,13 +854,19 @@ export default function AdminDashboard() {
             { key: "overview", label: "Overview" },
             { key: "medicines", label: "Medicines" },
             { key: "districts", label: "Districts" },
+            { key: "managers", label: "Managers" },
             { key: "data", label: "Data Management" },
           ].map((tab) => (
             <button
               key={tab.key}
               onClick={() =>
                 setActiveTab(
-                  tab.key as "overview" | "medicines" | "districts" | "data",
+                  tab.key as
+                    | "overview"
+                    | "medicines"
+                    | "districts"
+                    | "managers"
+                    | "data",
                 )
               }
               className={`py-4 px-2 border-b-2 transition-all ${
@@ -939,6 +1322,349 @@ export default function AdminDashboard() {
                         ))}
                       </div>
                     )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Managers Tab */}
+            {activeTab === "managers" && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Manager Management */}
+                  <div className="space-y-4">
+                    <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
+                      <h3 className="text-lg font-semibold mb-4">
+                        {editingManager
+                          ? "Edit Manager"
+                          : "Add District Manager"}
+                      </h3>
+                      <form onSubmit={handleAddManager} className="space-y-4">
+                        <input
+                          type="text"
+                          placeholder="Manager Name"
+                          value={newManager.name}
+                          onChange={(e) =>
+                            setNewManager({
+                              ...newManager,
+                              name: e.target.value,
+                            })
+                          }
+                          disabled={savingManager}
+                          className="w-full px-3 py-2 bg-slate-900/50 border border-cyan-500/20 rounded-lg text-slate-50 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                        <input
+                          type="email"
+                          placeholder="Manager Email"
+                          value={newManager.email}
+                          onChange={(e) =>
+                            setNewManager({
+                              ...newManager,
+                              email: e.target.value,
+                            })
+                          }
+                          disabled={savingManager}
+                          className="w-full px-3 py-2 bg-slate-900/50 border border-cyan-500/20 rounded-lg text-slate-50 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                        <select
+                          value={newManager.districtId}
+                          onChange={(e) =>
+                            setNewManager({
+                              ...newManager,
+                              districtId: e.target.value,
+                            })
+                          }
+                          disabled={savingManager}
+                          className="w-full px-3 py-2 bg-slate-900/50 border border-cyan-500/20 rounded-lg text-slate-50 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <option value="">Select District</option>
+                          {districts.map((district) => {
+                            const hasManager = managers.some(
+                              (m) =>
+                                m.districtId === district.id &&
+                                m.id !== editingManager?.id,
+                            );
+                            return (
+                              <option
+                                key={district.id}
+                                value={district.id}
+                                disabled={hasManager}
+                              >
+                                {district.name}
+                                {hasManager ? " (Has Manager)" : ""}
+                              </option>
+                            );
+                          })}
+                        </select>
+                        <button
+                          type="submit"
+                          disabled={savingManager}
+                          className="w-full py-2 bg-gradient-to-r from-cyan-500 to-cyan-400 hover:from-cyan-600 hover:to-cyan-500 text-slate-900 font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        >
+                          {savingManager ? (
+                            <>
+                              <span className="inline-block animate-spin">
+                                <svg
+                                  className="w-4 h-4"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M12 4v16m8-8H4"
+                                  />
+                                </svg>
+                              </span>
+                              Saving...
+                            </>
+                          ) : editingManager ? (
+                            "Update Manager"
+                          ) : (
+                            "Add Manager"
+                          )}
+                        </button>
+                        {editingManager && (
+                          <button
+                            type="button"
+                            onClick={handleCancelEditManager}
+                            disabled={savingManager}
+                            className="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-50 font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </form>
+                    </div>
+
+                    {/* Managers List */}
+                    <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
+                      <h3 className="text-lg font-semibold mb-4">
+                        District Managers ({managers.length})
+                      </h3>
+                      <div className="space-y-3 max-h-96 overflow-y-auto">
+                        {managers.length === 0 ? (
+                          <p className="text-slate-400 text-center py-8">
+                            No managers added yet
+                          </p>
+                        ) : (
+                          managers.map((manager) => (
+                            <div
+                              key={manager.id}
+                              className={`p-4 bg-slate-900/50 rounded-lg border ${
+                                editingManager?.id === manager.id
+                                  ? "border-cyan-400 bg-cyan-500/10"
+                                  : "border-cyan-500/10"
+                              } flex justify-between items-start`}
+                            >
+                              <div>
+                                <p className="font-semibold text-cyan-400">
+                                  {manager.name}
+                                </p>
+                                <p className="text-sm text-slate-400">
+                                  {manager.email}
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                  District: {manager.districtName}
+                                </p>
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleEditManager(manager)}
+                                  disabled={savingManager}
+                                  className="text-cyan-400 hover:text-cyan-300 text-sm px-2 py-1 rounded bg-cyan-500/10 hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    handleDeleteManager(manager.id)
+                                  }
+                                  disabled={savingManager}
+                                  className="text-red-400 hover:text-red-300 text-sm px-2 py-1 rounded bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Facility Manager Management */}
+                  <div className="space-y-4">
+                    <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
+                      <h3 className="text-lg font-semibold mb-4">
+                        {editingFacilityManager
+                          ? "Edit Facility Manager"
+                          : "Add Facility Manager"}
+                      </h3>
+                      <form
+                        onSubmit={handleAddFacilityManager}
+                        className="space-y-4"
+                      >
+                        <input
+                          type="text"
+                          placeholder="Facility Manager Name"
+                          value={newFacilityManager.name}
+                          onChange={(e) =>
+                            setNewFacilityManager({
+                              ...newFacilityManager,
+                              name: e.target.value,
+                            })
+                          }
+                          disabled={savingManager}
+                          className="w-full px-3 py-2 bg-slate-900/50 border border-cyan-500/20 rounded-lg text-slate-50 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                        <input
+                          type="email"
+                          placeholder="Facility Manager Email"
+                          value={newFacilityManager.email}
+                          onChange={(e) =>
+                            setNewFacilityManager({
+                              ...newFacilityManager,
+                              email: e.target.value,
+                            })
+                          }
+                          disabled={savingManager}
+                          className="w-full px-3 py-2 bg-slate-900/50 border border-cyan-500/20 rounded-lg text-slate-50 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                        <select
+                          value={newFacilityManager.districtId}
+                          onChange={(e) =>
+                            setNewFacilityManager({
+                              ...newFacilityManager,
+                              districtId: e.target.value,
+                              facility: "",
+                            })
+                          }
+                          disabled={savingManager}
+                          className="w-full px-3 py-2 bg-slate-900/50 border border-cyan-500/20 rounded-lg text-slate-50 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <option value="">Select District</option>
+                          {districts.map((district) => (
+                            <option key={district.id} value={district.id}>
+                              {district.name}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="Facility Name"
+                          value={newFacilityManager.facility}
+                          onChange={(e) =>
+                            setNewFacilityManager({
+                              ...newFacilityManager,
+                              facility: e.target.value,
+                            })
+                          }
+                          disabled={savingManager}
+                          className="w-full px-3 py-2 bg-slate-900/50 border border-cyan-500/20 rounded-lg text-slate-50 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                        <button
+                          type="submit"
+                          disabled={savingManager}
+                          className="w-full py-2 bg-gradient-to-r from-cyan-500 to-cyan-400 hover:from-cyan-600 hover:to-cyan-500 text-slate-900 font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        >
+                          {savingManager ? (
+                            <>
+                              <span className="inline-block animate-spin">
+                                <svg
+                                  className="w-4 h-4"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M12 4v16m8-8H4"
+                                  />
+                                </svg>
+                              </span>
+                              Saving...
+                            </>
+                          ) : editingFacilityManager ? (
+                            "Update Facility Manager"
+                          ) : (
+                            "Add Facility Manager"
+                          )}
+                        </button>
+                        {editingFacilityManager && (
+                          <button
+                            type="button"
+                            onClick={handleCancelEditFacilityManager}
+                            disabled={savingManager}
+                            className="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-50 font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </form>
+                    </div>
+
+                    {/* Facility Managers List */}
+                    <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
+                      <h3 className="text-lg font-semibold mb-4">
+                        Facility Managers ({facilityManagers.length})
+                      </h3>
+                      <div className="space-y-3 max-h-96 overflow-y-auto">
+                        {facilityManagers.length === 0 ? (
+                          <p className="text-slate-400 text-center py-8">
+                            No facility managers added yet
+                          </p>
+                        ) : (
+                          facilityManagers.map((fm) => (
+                            <div
+                              key={fm.id}
+                              className={`p-4 bg-slate-900/50 rounded-lg border ${
+                                editingFacilityManager?.id === fm.id
+                                  ? "border-cyan-400 bg-cyan-500/10"
+                                  : "border-cyan-500/10"
+                              } flex justify-between items-start`}
+                            >
+                              <div>
+                                <p className="font-semibold text-cyan-400">
+                                  {fm.name}
+                                </p>
+                                <p className="text-sm text-slate-400">
+                                  {fm.email}
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                  District: {fm.districtName}
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                  Facility: {fm.facility}
+                                </p>
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleEditFacilityManager(fm)}
+                                  disabled={savingManager}
+                                  className="text-cyan-400 hover:text-cyan-300 text-sm px-2 py-1 rounded bg-cyan-500/10 hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    handleDeleteFacilityManager(fm.id)
+                                  }
+                                  disabled={savingManager}
+                                  className="text-red-400 hover:text-red-300 text-sm px-2 py-1 rounded bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
