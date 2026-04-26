@@ -12,9 +12,11 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  onSnapshot,
   query,
   orderBy,
   where,
+  increment,
 } from "firebase/firestore";
 import {
   LineChart,
@@ -50,6 +52,7 @@ interface MedicineRecord {
   name: string;
   quantity: number;
   unit: string;
+  dosageForm?: string;
   expiryDate: string;
   allocatedQuantity: number;
   districtId: string;
@@ -81,15 +84,48 @@ interface MedicineAllocation {
   updatedAt?: number;
 }
 
+interface MedicineRequest {
+  id: string;
+  medicineName: string;
+  dosageForm: string;
+  requestedQuantity: number;
+  unit: string;
+  reason: string;
+  status: "pending" | "approved" | "rejected";
+  facilityId?: string;
+  facilityName?: string;
+  districtId: string;
+  districtName: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+interface ConsumptionRecord {
+  id: string;
+  medicineName: string;
+  quantity: number;
+  unit: string;
+  date: string;
+  patientCount?: number;
+  notes?: string;
+  facilityId: string;
+  facilityName: string;
+  districtId: string;
+  districtName: string;
+  createdAt?: number;
+}
+
 export default function DistrictManagerDashboard() {
   const navigate = useNavigate();
   const { districtId, districtName, loading: authLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<
     | "overview"
     | "medicines"
+    | "facilities"
     | "forecast"
     | "allocation"
     | "analytics"
+    | "requests"
     | "reports"
   >("overview");
   const [loggingOut, setLoggingOut] = useState(false);
@@ -121,6 +157,7 @@ export default function DistrictManagerDashboard() {
     name: "",
     quantity: "",
     unit: "",
+    dosageForm: "",
     expiryDate: "",
     allocatedQuantity: "",
   });
@@ -128,7 +165,25 @@ export default function DistrictManagerDashboard() {
   // Cache management constants
   const AI_CACHE_KEY = `ai_analysis_${districtId}`;
   const CACHE_DURATION_MS = 60 * 60 * 1000; // 1 hour
-  const [lastDataChangeTime, setLastDataChangeTime] = useState<number>(0);
+  const [requests, setRequests] = useState<MedicineRequest[]>([]);
+  const [showRequestModal, setShowRequestModal] = useState(false);
+  const [newRequest, setNewRequest] = useState({
+    medicineName: "",
+    dosageForm: "",
+    requestedQuantity: "",
+    unit: "",
+    reason: "",
+  });
+  const [savingRequest, setSavingRequest] = useState(false);
+  const [consumptionRecords, setConsumptionRecords] = useState<ConsumptionRecord[]>([]);
+  const [expandedFacilityId, setExpandedFacilityId] = useState<string | null>(null);
+
+  // Approve-request modal state
+  const [showApproveModal, setShowApproveModal] = useState(false);
+  const [approvingRequest, setApprovingRequest] = useState<MedicineRequest | null>(null);
+  const [approveAmount, setApproveAmount] = useState("");
+  const [approveFacilityId, setApproveFacilityId] = useState("");
+  const [savingApproval, setSavingApproval] = useState(false);
 
   // Redirect if not a district manager
   useEffect(() => {
@@ -137,11 +192,114 @@ export default function DistrictManagerDashboard() {
     }
   }, [authLoading, districtId, navigate]);
 
-  // Fetch district-specific data
+  // Set up real-time data listeners
   useEffect(() => {
-    if (districtId) {
-      fetchData();
-    }
+    if (!districtId) return;
+
+    setLoading(true);
+    const cacheKey = `ai_analysis_${districtId}`;
+    let loadedCount = 0;
+    const LISTENER_COUNT = 4;
+
+    const onListenerReady = () => {
+      loadedCount++;
+      if (loadedCount >= LISTENER_COUNT) setLoading(false);
+    };
+
+    const medicinesQuery = query(
+      collection(db, "medicines"),
+      where("districtId", "==", districtId),
+      orderBy("createdAt", "desc"),
+    );
+    const unsubMedicines = onSnapshot(
+      medicinesQuery,
+      (snapshot) => {
+        const data = snapshot.docs.map((d) => {
+          const rec = d.data();
+          return { id: d.id, ...rec, allocatedQuantity: rec.allocatedQuantity || 0 } as MedicineRecord;
+        });
+        setMedicines(data);
+        localStorage.removeItem(cacheKey);
+        onListenerReady();
+      },
+      (err) => {
+        console.error("Error listening to medicines:", err);
+        setError("Failed to load medicines");
+        onListenerReady();
+      },
+    );
+
+    const facilitiesQuery = query(
+      collection(db, "facilities"),
+      where("districtId", "==", districtId),
+      orderBy("createdAt", "desc"),
+    );
+    const unsubFacilities = onSnapshot(
+      facilitiesQuery,
+      (snapshot) => {
+        setFacilities(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as Facility[]);
+        onListenerReady();
+      },
+      (err) => {
+        console.error("Error listening to facilities:", err);
+        onListenerReady();
+      },
+    );
+
+    const allocationsQuery = query(
+      collection(db, "medicineAllocations"),
+      where("districtId", "==", districtId),
+      orderBy("createdAt", "desc"),
+    );
+    const unsubAllocations = onSnapshot(
+      allocationsQuery,
+      (snapshot) => {
+        setAllocations(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as MedicineAllocation[]);
+        onListenerReady();
+      },
+      (err) => {
+        console.error("Error listening to allocations:", err);
+        onListenerReady();
+      },
+    );
+
+    const requestsQuery = query(
+      collection(db, "medicineRequests"),
+      where("districtId", "==", districtId),
+      orderBy("createdAt", "desc"),
+    );
+    const unsubRequests = onSnapshot(
+      requestsQuery,
+      (snapshot) => {
+        setRequests(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as MedicineRequest[]);
+      },
+      (err) => console.error("Error listening to requests:", err),
+    );
+
+    const consumptionQuery = query(
+      collection(db, "consumptionRecords"),
+      where("districtId", "==", districtId),
+      orderBy("createdAt", "desc"),
+    );
+    const unsubConsumption = onSnapshot(
+      consumptionQuery,
+      (snapshot) => {
+        setConsumptionRecords(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as ConsumptionRecord[]);
+        onListenerReady();
+      },
+      (err) => {
+        console.error("Error listening to consumption records:", err);
+        onListenerReady();
+      },
+    );
+
+    return () => {
+      unsubMedicines();
+      unsubFacilities();
+      unsubAllocations();
+      unsubRequests();
+      unsubConsumption();
+    };
   }, [districtId]);
 
   // Load cached AI analysis on mount
@@ -234,74 +392,6 @@ export default function DistrictManagerDashboard() {
     }
   };
 
-  const fetchData = async () => {
-    if (!districtId) {
-      console.log("Cannot fetch data: districtId is null or undefined");
-      return;
-    }
-
-    try {
-      setLoading(true);
-      console.log("Fetching medicines for districtId:", districtId);
-
-      // Fetch medicines for this district only
-      const medicinesQuery = query(
-        collection(db, "medicines"),
-        where("districtId", "==", districtId),
-        orderBy("createdAt", "desc"),
-      );
-      const medicinesSnapshot = await getDocs(medicinesQuery);
-      console.log("Medicines found:", medicinesSnapshot.docs.length);
-      const medicinesData = medicinesSnapshot.docs.map((doc) => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          allocatedQuantity: data.allocatedQuantity || 0,
-        } as MedicineRecord;
-      });
-      setMedicines(medicinesData);
-
-      // Fetch facilities for this district only
-      const facilitiesQuery = query(
-        collection(db, "facilities"),
-        where("districtId", "==", districtId),
-        orderBy("createdAt", "desc"),
-      );
-      const facilitiesSnapshot = await getDocs(facilitiesQuery);
-      console.log("Facilities found:", facilitiesSnapshot.docs.length);
-      const facilitiesData = facilitiesSnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as Facility[];
-      setFacilities(facilitiesData);
-
-      // Fetch allocations for this district only
-      const allocationsQuery = query(
-        collection(db, "medicineAllocations"),
-        where("districtId", "==", districtId),
-        orderBy("createdAt", "desc"),
-      );
-      const allocationsSnapshot = await getDocs(allocationsQuery);
-      const allocationsData = allocationsSnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as MedicineAllocation[];
-      setAllocations(allocationsData);
-
-      // Invalidate AI cache on data fetch
-      localStorage.removeItem(AI_CACHE_KEY);
-      setLastDataChangeTime(Date.now());
-
-      setError(null);
-    } catch (err) {
-      console.error("Error fetching data:", err);
-      setError("Failed to load data from database");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleLogout = async () => {
     try {
       setLoggingOut(true);
@@ -347,6 +437,7 @@ export default function DistrictManagerDashboard() {
           name: newMedicine.name,
           quantity: parseInt(newMedicine.quantity),
           unit: newMedicine.unit,
+          dosageForm: newMedicine.dosageForm,
           expiryDate: newMedicine.expiryDate,
           allocatedQuantity: parseInt(newMedicine.allocatedQuantity),
           updatedAt: now,
@@ -359,6 +450,7 @@ export default function DistrictManagerDashboard() {
           name: newMedicine.name,
           quantity: parseInt(newMedicine.quantity),
           unit: newMedicine.unit,
+          dosageForm: newMedicine.dosageForm,
           expiryDate: newMedicine.expiryDate,
           allocatedQuantity: parseInt(newMedicine.allocatedQuantity),
           districtId: districtId,
@@ -373,11 +465,11 @@ export default function DistrictManagerDashboard() {
         name: "",
         quantity: "",
         unit: "",
+        dosageForm: "",
         expiryDate: "",
         allocatedQuantity: "",
       });
       setShowAddMedicineModal(false);
-      await fetchData();
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       console.error("Error adding/updating medicine:", err);
@@ -393,6 +485,7 @@ export default function DistrictManagerDashboard() {
       name: medicine.name,
       quantity: medicine.quantity.toString(),
       unit: medicine.unit,
+      dosageForm: medicine.dosageForm || "",
       expiryDate: medicine.expiryDate,
       allocatedQuantity: medicine.allocatedQuantity.toString(),
     });
@@ -406,7 +499,6 @@ export default function DistrictManagerDashboard() {
       setSavingMedicine(true);
       await deleteDoc(doc(db, "medicines", medicineId));
       setSuccess("Medicine deleted successfully");
-      await fetchData();
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       console.error("Error deleting medicine:", err);
@@ -422,6 +514,7 @@ export default function DistrictManagerDashboard() {
       name: "",
       quantity: "",
       unit: "",
+      dosageForm: "",
       expiryDate: "",
       allocatedQuantity: "",
     });
@@ -482,6 +575,14 @@ export default function DistrictManagerDashboard() {
         updatedAt: now,
       });
 
+      // Keep medicine's allocatedQuantity field in sync
+      if (allocationForm.allocationType === "quantity") {
+        await updateDoc(doc(db, "medicines", allocationForm.medicineId), {
+          allocatedQuantity: increment(amount),
+          updatedAt: now,
+        });
+      }
+
       setSuccess("Allocation created successfully");
       setAllocationForm({
         medicineId: "",
@@ -489,7 +590,6 @@ export default function DistrictManagerDashboard() {
         allocationType: "quantity",
         amount: "",
       });
-      await fetchData();
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       console.error("Error creating allocation:", err);
@@ -503,17 +603,151 @@ export default function DistrictManagerDashboard() {
   const handleDeleteAllocation = async (allocationId: string) => {
     if (!confirm("Are you sure you want to remove this allocation?")) return;
 
+    const allocation = allocations.find((a) => a.id === allocationId);
+
     try {
       setSavingAllocation(true);
       await deleteDoc(doc(db, "medicineAllocations", allocationId));
+
+      // Decrement the medicine's allocatedQuantity when a quantity-based allocation is deleted
+      if (allocation && allocation.allocationType === "quantity") {
+        await updateDoc(doc(db, "medicines", allocation.medicineId), {
+          allocatedQuantity: increment(-allocation.amount),
+          updatedAt: Date.now(),
+        });
+      }
+
       setSuccess("Allocation deleted successfully");
-      await fetchData();
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       console.error("Error deleting allocation:", err);
       setError("Failed to delete allocation");
     } finally {
       setSavingAllocation(false);
+    }
+  };
+
+  const handleSubmitRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!districtId || !newRequest.medicineName || !newRequest.requestedQuantity || !newRequest.unit) {
+      setError("Please fill all required fields (medicine name, quantity, unit)");
+      return;
+    }
+    try {
+      setSavingRequest(true);
+      await addDoc(collection(db, "medicineRequests"), {
+        medicineName: newRequest.medicineName,
+        dosageForm: newRequest.dosageForm,
+        requestedQuantity: parseInt(newRequest.requestedQuantity),
+        unit: newRequest.unit,
+        reason: newRequest.reason,
+        status: "pending",
+        districtId: districtId,
+        districtName: districtName,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      setSuccess("Request submitted successfully");
+      setNewRequest({ medicineName: "", dosageForm: "", requestedQuantity: "", unit: "", reason: "" });
+      setShowRequestModal(false);
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error submitting request:", err);
+      setError("Failed to submit request");
+    } finally {
+      setSavingRequest(false);
+    }
+  };
+
+  // Open the approve-and-allocate modal
+  const handleApproveRequest = (req: MedicineRequest) => {
+    setApprovingRequest(req);
+    setApproveFacilityId(req.facilityId || "");
+    setApproveAmount(String(req.requestedQuantity));
+    setShowApproveModal(true);
+  };
+
+  // Confirm approval: validate stock, create allocation, update medicine, mark request approved
+  const handleConfirmApproval = async () => {
+    if (!approvingRequest) return;
+    const amount = parseFloat(approveAmount);
+    if (isNaN(amount) || amount <= 0) {
+      setError("Please enter a valid allocation amount.");
+      return;
+    }
+
+    const medicine = medicines.find(
+      (m) => m.name.toLowerCase() === approvingRequest.medicineName.toLowerCase()
+    );
+
+    if (medicine) {
+      const available = medicine.quantity - (medicine.allocatedQuantity || 0);
+      if (amount > available) {
+        setError(
+          `Insufficient stock. Only ${available} ${medicine.unit} available after existing allocations.`
+        );
+        return;
+      }
+    }
+
+    try {
+      setSavingApproval(true);
+      const now = Date.now();
+
+      // Create allocation record
+      await addDoc(collection(db, "medicineAllocations"), {
+        medicineId: medicine?.id || "",
+        medicineName: approvingRequest.medicineName,
+        facilityId: approvingRequest.facilityId || approveFacilityId,
+        facilityName: approvingRequest.facilityName || "",
+        allocationType: "quantity",
+        amount: amount,
+        districtId: districtId,
+        sourceRequestId: approvingRequest.id,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // Update medicine's allocatedQuantity if found in district stock
+      if (medicine) {
+        await updateDoc(doc(db, "medicines", medicine.id), {
+          allocatedQuantity: increment(amount),
+          updatedAt: now,
+        });
+      }
+
+      // Mark the request as approved
+      await updateDoc(doc(db, "medicineRequests", approvingRequest.id), {
+        status: "approved",
+        allocatedAmount: amount,
+        updatedAt: now,
+      });
+
+      setSuccess(`Request approved and ${amount} ${approvingRequest.unit || ""} allocated to ${approvingRequest.facilityName || "facility"}.`);
+      setTimeout(() => setSuccess(null), 4000);
+      setShowApproveModal(false);
+      setApprovingRequest(null);
+      setApproveAmount("");
+    } catch (err) {
+      console.error("Error approving request:", err);
+      setError("Failed to approve request");
+    } finally {
+      setSavingApproval(false);
+    }
+  };
+
+  const handleRejectRequest = async (requestId: string) => {
+    if (!confirm("Are you sure you want to reject this request?")) return;
+    try {
+      await updateDoc(doc(db, "medicineRequests", requestId), {
+        status: "rejected",
+        updatedAt: Date.now(),
+      });
+      setSuccess("Request rejected");
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error rejecting request:", err);
+      setError("Failed to reject request");
     }
   };
 
@@ -648,8 +882,30 @@ export default function DistrictManagerDashboard() {
                     setNewMedicine({ ...newMedicine, unit: e.target.value })
                   }
                   className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
-                  placeholder="e.g., tablets, bottles"
+                  placeholder="e.g., 500mg, bottles"
                 />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">
+                  Dosage Form
+                </label>
+                <select
+                  value={newMedicine.dosageForm}
+                  onChange={(e) =>
+                    setNewMedicine({ ...newMedicine, dosageForm: e.target.value })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                >
+                  <option value="">-- Select Dosage Form --</option>
+                  <option value="Tablet">Tablet</option>
+                  <option value="Capsule">Capsule</option>
+                  <option value="Syrup">Syrup</option>
+                  <option value="Powder">Powder</option>
+                  <option value="Injection">Injection</option>
+                  <option value="Drops">Drops</option>
+                  <option value="Cream/Ointment">Cream/Ointment</option>
+                  <option value="Other">Other</option>
+                </select>
               </div>
               <div>
                 <label className="block text-sm text-slate-300 mb-1">
@@ -843,6 +1099,199 @@ export default function DistrictManagerDashboard() {
         </div>
       )}
 
+      {/* New Request Modal */}
+      {showRequestModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-slate-800 border border-cyan-500/20 rounded-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-cyan-400 mb-4">
+              Request Medicine from Central Store
+            </h3>
+            <form onSubmit={handleSubmitRequest} className="space-y-4">
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">
+                  Medicine Name *
+                </label>
+                <input
+                  type="text"
+                  value={newRequest.medicineName}
+                  onChange={(e) => setNewRequest({ ...newRequest, medicineName: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                  placeholder="e.g., Paracetamol"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">
+                  Dosage Form
+                </label>
+                <select
+                  value={newRequest.dosageForm}
+                  onChange={(e) => setNewRequest({ ...newRequest, dosageForm: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                >
+                  <option value="">-- Select Dosage Form --</option>
+                  <option value="Tablet">Tablet</option>
+                  <option value="Capsule">Capsule</option>
+                  <option value="Syrup">Syrup</option>
+                  <option value="Powder">Powder</option>
+                  <option value="Injection">Injection</option>
+                  <option value="Drops">Drops</option>
+                  <option value="Cream/Ointment">Cream/Ointment</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm text-slate-300 mb-1">
+                    Quantity *
+                  </label>
+                  <input
+                    type="number"
+                    value={newRequest.requestedQuantity}
+                    onChange={(e) => setNewRequest({ ...newRequest, requestedQuantity: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                    placeholder="e.g., 500"
+                    required
+                    min="1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-300 mb-1">
+                    Unit *
+                  </label>
+                  <input
+                    type="text"
+                    value={newRequest.unit}
+                    onChange={(e) => setNewRequest({ ...newRequest, unit: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400"
+                    placeholder="e.g., tablets"
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">
+                  Reason / Justification
+                </label>
+                <textarea
+                  value={newRequest.reason}
+                  onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-700 border border-cyan-500/20 rounded-lg text-white focus:outline-none focus:border-cyan-400 resize-none"
+                  placeholder="e.g., Stock depleted due to increased patient demand"
+                  rows={3}
+                />
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={savingRequest}
+                  className="flex-1 px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-slate-900 font-semibold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {savingRequest ? "Submitting..." : "Submit Request"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRequestModal(false);
+                    setNewRequest({ medicineName: "", dosageForm: "", requestedQuantity: "", unit: "", reason: "" });
+                  }}
+                  disabled={savingRequest}
+                  className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Approve & Allocate Modal */}
+      {showApproveModal && approvingRequest && (() => {
+        const med = medicines.find(
+          (m) => m.name.toLowerCase() === approvingRequest.medicineName.toLowerCase()
+        );
+        const available = med ? med.quantity - (med.allocatedQuantity || 0) : null;
+        return (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+            <div className="bg-slate-800 border border-emerald-500/20 rounded-xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-lg font-semibold text-emerald-400 mb-1">
+                Approve Request &amp; Allocate Stock
+              </h3>
+              <p className="text-slate-400 text-sm mb-4">
+                {approvingRequest.facilityName || "Facility"} &mdash; {approvingRequest.medicineName}
+              </p>
+
+              <div className="bg-slate-700/40 rounded-lg p-4 mb-4 space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Requested quantity</span>
+                  <span className="text-white font-medium">
+                    {approvingRequest.requestedQuantity} {approvingRequest.unit}
+                  </span>
+                </div>
+                {available !== null ? (
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Available in district</span>
+                    <span className={available < Number(approvingRequest.requestedQuantity) ? "text-red-400 font-medium" : "text-emerald-400 font-medium"}>
+                      {available} {med?.unit}
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-amber-400 text-xs">
+                    Medicine not found in district stock — approval will be recorded without a stock allocation.
+                  </p>
+                )}
+                {approvingRequest.reason && (
+                  <div className="pt-1 border-t border-slate-600 mt-2">
+                    <span className="text-slate-400">Reason: </span>
+                    <span className="text-slate-300">{approvingRequest.reason}</span>
+                  </div>
+                )}
+              </div>
+
+              {available !== null && (
+                <div className="mb-4">
+                  <label className="block text-sm text-slate-300 mb-1">
+                    Amount to allocate *
+                  </label>
+                  <input
+                    type="number"
+                    value={approveAmount}
+                    onChange={(e) => setApproveAmount(e.target.value)}
+                    min="0"
+                    max={available}
+                    className="w-full px-3 py-2 bg-slate-700 border border-emerald-500/30 rounded-lg text-white focus:outline-none focus:border-emerald-400"
+                  />
+                  {Number(approveAmount) > available && (
+                    <p className="text-red-400 text-xs mt-1">
+                      Exceeds available stock ({available} {med?.unit})
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  onClick={handleConfirmApproval}
+                  disabled={savingApproval || (available !== null && Number(approveAmount) > available) || (available !== null && Number(approveAmount) <= 0)}
+                  className="flex-1 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {savingApproval ? "Processing..." : "Confirm Approval"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowApproveModal(false); setApprovingRequest(null); setApproveAmount(""); }}
+                  disabled={savingApproval}
+                  className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Header */}
       <header className="sticky top-0 z-40 border-b border-cyan-500/10 bg-slate-900/80 backdrop-blur-md px-6 py-4">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
@@ -868,9 +1317,11 @@ export default function DistrictManagerDashboard() {
           {[
             { key: "overview", label: "Overview" },
             { key: "medicines", label: "Medicines" },
+            { key: "facilities", label: "Facilities" },
             { key: "forecast", label: "Demand Forecast" },
             { key: "allocation", label: "Allocations" },
             { key: "analytics", label: "Analytics" },
+            { key: "requests", label: "Requests" },
             { key: "reports", label: "Reports" },
           ].map((tab) => (
             <button
@@ -880,9 +1331,11 @@ export default function DistrictManagerDashboard() {
                   tab.key as
                     | "overview"
                     | "medicines"
+                    | "facilities"
                     | "forecast"
                     | "allocation"
                     | "analytics"
+                    | "requests"
                     | "reports",
                 )
               }
@@ -1082,6 +1535,7 @@ export default function DistrictManagerDashboard() {
                       name: "",
                       quantity: "",
                       unit: "",
+                      dosageForm: "",
                       expiryDate: "",
                       allocatedQuantity: "",
                     });
@@ -1105,9 +1559,16 @@ export default function DistrictManagerDashboard() {
                       className="p-4 rounded-lg bg-slate-900/50 border border-cyan-500/10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
                     >
                       <div className="flex-1">
-                        <p className="font-semibold text-cyan-400 text-lg">
-                          {medicine.name}
-                        </p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-semibold text-cyan-400 text-lg">
+                            {medicine.name}
+                          </p>
+                          {medicine.dosageForm && (
+                            <span className="px-2 py-0.5 text-xs rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                              {medicine.dosageForm}
+                            </span>
+                          )}
+                        </div>
                         <div className="mt-3 grid grid-cols-4 gap-4 text-sm">
                           <div>
                             <p className="text-slate-400 text-xs mb-1">
@@ -1495,6 +1956,408 @@ export default function DistrictManagerDashboard() {
                 </LineChart>
               </ResponsiveContainer>
             </div>
+          </div>
+        )}
+
+        {/* Facilities Tab */}
+        {activeTab === "facilities" && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-2xl font-bold text-cyan-400">Facilities in {districtName}</h2>
+              <p className="text-sm text-slate-400 mt-1">
+                Allocations, consumption records, and requests for each facility
+              </p>
+            </div>
+
+            {facilities.length === 0 ? (
+              <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60 text-center">
+                <p className="text-slate-400 py-4">No facilities found in your district.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {facilities.map((facility) => {
+                  const facilityAllocations = allocations.filter((a) => a.facilityId === facility.id);
+                  const facilityConsumption = consumptionRecords.filter((c) => c.facilityId === facility.id);
+                  const facilityRequests = requests.filter((r) => r.facilityId === facility.id);
+                  const pendingCount = facilityRequests.filter((r) => r.status === "pending").length;
+                  const totalAllocatedUnits = facilityAllocations
+                    .filter((a) => a.allocationType === "quantity")
+                    .reduce((s, a) => s + a.amount, 0);
+                  const totalConsumed = facilityConsumption.reduce((s, c) => s + c.quantity, 0);
+                  const isExpanded = expandedFacilityId === facility.id;
+
+                  return (
+                    <div
+                      key={facility.id}
+                      className="rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60 overflow-hidden"
+                    >
+                      {/* Facility header */}
+                      <div className="p-4 sm:p-6 flex items-start justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="text-lg font-semibold text-slate-100">{facility.name}</h3>
+                            <span
+                              className={`px-2 py-0.5 text-xs rounded-full font-semibold ${
+                                facility.status === "active"
+                                  ? "bg-emerald-500/20 text-emerald-300"
+                                  : "bg-slate-500/20 text-slate-400"
+                              }`}
+                            >
+                              {facility.status}
+                            </span>
+                            {pendingCount > 0 && (
+                              <span className="px-2 py-0.5 text-xs rounded-full bg-yellow-500/20 text-yellow-300 font-semibold">
+                                {pendingCount} pending request{pendingCount !== 1 ? "s" : ""}
+                              </span>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+                            <div className="p-2 bg-slate-900/50 rounded-lg">
+                              <p className="text-xs text-slate-400">Allocations</p>
+                              <p className="text-base font-bold text-cyan-400">{facilityAllocations.length}</p>
+                            </div>
+                            <div className="p-2 bg-slate-900/50 rounded-lg">
+                              <p className="text-xs text-slate-400">Total Allocated</p>
+                              <p className="text-base font-bold text-cyan-400">{totalAllocatedUnits} units</p>
+                            </div>
+                            <div className="p-2 bg-slate-900/50 rounded-lg">
+                              <p className="text-xs text-slate-400">Total Consumed</p>
+                              <p className="text-base font-bold text-amber-400">{totalConsumed} units</p>
+                            </div>
+                            <div className="p-2 bg-slate-900/50 rounded-lg">
+                              <p className="text-xs text-slate-400">Requests</p>
+                              <p className="text-base font-bold text-slate-200">{facilityRequests.length}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-2 shrink-0">
+                          <button
+                            onClick={() => {
+                              setAllocationForm((prev) => ({ ...prev, facilityId: facility.id }));
+                              setShowAddAllocationModal(true);
+                            }}
+                            className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-600 text-slate-900 font-semibold rounded-lg text-sm transition-all whitespace-nowrap"
+                          >
+                            Allocate Medicine
+                          </button>
+                          <button
+                            onClick={() => setExpandedFacilityId(isExpanded ? null : facility.id)}
+                            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-sm transition-all whitespace-nowrap"
+                          >
+                            {isExpanded ? "Hide Details" : "View Details"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Expanded details */}
+                      {isExpanded && (
+                        <div className="border-t border-slate-700/50 p-4 sm:p-6 space-y-6">
+                          {/* Allocations */}
+                          <div>
+                            <h4 className="text-sm font-semibold text-slate-300 mb-3">Current Allocations</h4>
+                            {facilityAllocations.length === 0 ? (
+                              <p className="text-slate-500 text-sm">No allocations yet.</p>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead>
+                                    <tr className="text-slate-400 border-b border-slate-700/50">
+                                      <th className="text-left py-2 pr-4">Medicine</th>
+                                      <th className="text-right py-2 pr-4">Amount</th>
+                                      <th className="text-right py-2">Type</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {facilityAllocations.map((a) => (
+                                      <tr key={a.id} className="border-b border-slate-700/30">
+                                        <td className="py-2 pr-4 font-medium text-cyan-400">{a.medicineName}</td>
+                                        <td className="py-2 pr-4 text-right text-slate-200">
+                                          {a.amount} {a.allocationType === "percentage" ? "%" : "units"}
+                                        </td>
+                                        <td className="py-2 text-right text-slate-400 capitalize">{a.allocationType}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Recent Consumption */}
+                          <div>
+                            <h4 className="text-sm font-semibold text-slate-300 mb-3">Recent Consumption</h4>
+                            {facilityConsumption.length === 0 ? (
+                              <p className="text-slate-500 text-sm">No consumption records yet.</p>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead>
+                                    <tr className="text-slate-400 border-b border-slate-700/50">
+                                      <th className="text-left py-2 pr-4">Date</th>
+                                      <th className="text-left py-2 pr-4">Medicine</th>
+                                      <th className="text-right py-2 pr-4">Qty</th>
+                                      <th className="text-right py-2">Patients</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {facilityConsumption.slice(0, 5).map((c) => (
+                                      <tr key={c.id} className="border-b border-slate-700/30">
+                                        <td className="py-2 pr-4 text-slate-400">{c.date}</td>
+                                        <td className="py-2 pr-4 font-medium">{c.medicineName}</td>
+                                        <td className="py-2 pr-4 text-right text-amber-400">
+                                          {c.quantity} {c.unit}
+                                        </td>
+                                        <td className="py-2 text-right text-slate-300">{c.patientCount || "—"}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                                {facilityConsumption.length > 5 && (
+                                  <p className="text-xs text-slate-500 mt-2">
+                                    Showing 5 of {facilityConsumption.length} records
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Requests */}
+                          {facilityRequests.length > 0 && (
+                            <div>
+                              <h4 className="text-sm font-semibold text-slate-300 mb-3">Medicine Requests</h4>
+                              <div className="space-y-2">
+                                {facilityRequests.map((req) => (
+                                  <div
+                                    key={req.id}
+                                    className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50 flex items-center justify-between gap-3"
+                                  >
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="font-medium text-sm">{req.medicineName}</span>
+                                        <span className="text-sm text-slate-300">
+                                          {req.requestedQuantity} {req.unit}
+                                        </span>
+                                        <span
+                                          className={`px-2 py-0.5 text-xs rounded-full font-semibold ${
+                                            req.status === "approved"
+                                              ? "bg-emerald-500/20 text-emerald-300"
+                                              : req.status === "rejected"
+                                              ? "bg-red-500/20 text-red-300"
+                                              : "bg-yellow-500/20 text-yellow-300"
+                                          }`}
+                                        >
+                                          {req.status.toUpperCase()}
+                                        </span>
+                                      </div>
+                                      {req.reason && (
+                                        <p className="text-xs text-slate-400 mt-1">{req.reason}</p>
+                                      )}
+                                    </div>
+                                    {req.status === "pending" && (
+                                      <div className="flex gap-2 shrink-0">
+                                        <button
+                                          onClick={() => handleApproveRequest(req)}
+                                          className="px-2 py-1 bg-emerald-500/20 text-emerald-300 rounded text-xs font-semibold hover:bg-emerald-500/30 transition-all"
+                                        >
+                                          Approve
+                                        </button>
+                                        <button
+                                          onClick={() => handleRejectRequest(req.id)}
+                                          className="px-2 py-1 bg-red-500/20 text-red-300 rounded text-xs font-semibold hover:bg-red-500/30 transition-all"
+                                        >
+                                          Reject
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Requests Tab */}
+        {activeTab === "requests" && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="text-2xl font-bold text-cyan-400">Medicine Requests</h2>
+                <p className="text-sm text-slate-400 mt-1">
+                  Requests from facilities and your requests to the central store
+                </p>
+              </div>
+              <button
+                onClick={() => setShowRequestModal(true)}
+                className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-slate-900 font-semibold rounded-lg transition-all"
+              >
+                + Request from Central Store
+              </button>
+            </div>
+
+            {/* Facility Requests */}
+            {(() => {
+              const facilityRequests = requests.filter((r) => r.facilityId);
+              const pendingFacilityRequests = facilityRequests.filter((r) => r.status === "pending");
+              return (
+                <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold">Requests from Facilities</h3>
+                    {pendingFacilityRequests.length > 0 && (
+                      <span className="px-2 py-0.5 text-xs rounded-full bg-yellow-500/20 text-yellow-300 font-semibold">
+                        {pendingFacilityRequests.length} pending
+                      </span>
+                    )}
+                  </div>
+                  {facilityRequests.length === 0 ? (
+                    <p className="text-slate-400 text-sm py-4 text-center">
+                      No requests from facilities yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {facilityRequests.map((req) => (
+                        <div
+                          key={req.id}
+                          className="p-4 rounded-lg bg-slate-900/50 border border-cyan-500/10 flex items-start justify-between gap-3"
+                        >
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 flex-wrap mb-2">
+                              <p className="font-semibold text-cyan-400">{req.medicineName}</p>
+                              {req.dosageForm && (
+                                <span className="px-2 py-0.5 text-xs rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                                  {req.dosageForm}
+                                </span>
+                              )}
+                              <span
+                                className={`px-2 py-0.5 text-xs rounded-full font-semibold ${
+                                  req.status === "approved"
+                                    ? "bg-emerald-500/20 text-emerald-300"
+                                    : req.status === "rejected"
+                                    ? "bg-red-500/20 text-red-300"
+                                    : "bg-yellow-500/20 text-yellow-300"
+                                }`}
+                              >
+                                {req.status.toUpperCase()}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                              <div>
+                                <p className="text-slate-400 text-xs">Facility</p>
+                                <p className="text-slate-200 font-medium">{req.facilityName || "—"}</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-400 text-xs">Requested Qty</p>
+                                <p className="text-slate-200 font-semibold">
+                                  {req.requestedQuantity} {req.unit}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-slate-400 text-xs">Reason</p>
+                                <p className="text-slate-300 text-xs">{req.reason || "—"}</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-400 text-xs">Submitted</p>
+                                <p className="text-slate-300 text-xs">
+                                  {new Date(req.createdAt || 0).toLocaleDateString()}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                          {req.status === "pending" && (
+                            <div className="flex flex-col gap-2 shrink-0">
+                              <button
+                                onClick={() => handleApproveRequest(req)}
+                                className="px-3 py-1.5 bg-emerald-500/20 text-emerald-300 rounded-lg hover:bg-emerald-500/30 transition-all text-xs font-semibold whitespace-nowrap"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                onClick={() => handleRejectRequest(req.id)}
+                                className="px-3 py-1.5 bg-red-500/20 text-red-300 rounded-lg hover:bg-red-500/30 transition-all text-xs font-semibold whitespace-nowrap"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* District manager's own requests to central store */}
+            {(() => {
+              const myRequests = requests.filter((r) => !r.facilityId);
+              return myRequests.length > 0 ? (
+                <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
+                  <h3 className="text-lg font-semibold mb-4">My Requests to Central Store</h3>
+                  <div className="space-y-3">
+                    {myRequests.map((req) => (
+                      <div
+                        key={req.id}
+                        className="p-4 rounded-lg bg-slate-900/50 border border-cyan-500/10"
+                      >
+                        <div className="flex items-center gap-2 flex-wrap mb-2">
+                          <p className="font-semibold text-cyan-400">{req.medicineName}</p>
+                          {req.dosageForm && (
+                            <span className="px-2 py-0.5 text-xs rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                              {req.dosageForm}
+                            </span>
+                          )}
+                          <span
+                            className={`px-2 py-0.5 text-xs rounded-full font-semibold ${
+                              req.status === "approved"
+                                ? "bg-emerald-500/20 text-emerald-300"
+                                : req.status === "rejected"
+                                ? "bg-red-500/20 text-red-300"
+                                : "bg-yellow-500/20 text-yellow-300"
+                            }`}
+                          >
+                            {req.status.toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                          <div>
+                            <p className="text-slate-400 text-xs">Requested Qty</p>
+                            <p className="text-slate-200 font-semibold">
+                              {req.requestedQuantity} {req.unit}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-slate-400 text-xs">Reason</p>
+                            <p className="text-slate-300 text-xs">{req.reason || "—"}</p>
+                          </div>
+                          <div>
+                            <p className="text-slate-400 text-xs">Submitted</p>
+                            <p className="text-slate-300 text-xs">
+                              {new Date(req.createdAt || 0).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null;
+            })()}
+
+            {requests.length === 0 && (
+              <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60 text-center">
+                <p className="text-slate-400 py-4">
+                  No requests yet. Facility managers can submit requests from their dashboards, or click "+ Request from Central Store" above.
+                </p>
+              </div>
+            )}
           </div>
         )}
 
