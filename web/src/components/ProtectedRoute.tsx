@@ -64,6 +64,14 @@ export function ProtectedRoute({
                   Go to District Manager Dashboard
                 </button>
               )}
+              {role === "facility_manager" && (
+                <button
+                  onClick={() => navigate("/facility-manager")}
+                  className="w-full bg-gradient-to-r from-violet-500 to-violet-400 hover:from-violet-600 hover:to-violet-500 text-slate-900 font-semibold py-2 px-4 rounded-lg transition-all"
+                >
+                  Go to Facility Manager Dashboard
+                </button>
+              )}
               <button
                 onClick={() => navigate("/login")}
                 className="w-full bg-slate-700 hover:bg-slate-600 text-slate-100 font-semibold py-2 px-4 rounded-lg transition-all"
