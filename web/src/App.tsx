@@ -3,6 +3,7 @@ import LandingPage from "./pages/LandingPage";
 import LoginPage from "./pages/auth/LoginPage";
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import DistrictManagerDashboard from "./pages/district_manager/DistrictManagerDashboard";
+import FacilityManagerDashboard from "./pages/facility_manager/FacilityManagerDashboard";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
 
@@ -26,6 +27,14 @@ export default function App() {
             element={
               <ProtectedRoute requiredRole="district_manager">
                 <DistrictManagerDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/facility-manager"
+            element={
+              <ProtectedRoute requiredRole="facility_manager">
+                <FacilityManagerDashboard />
               </ProtectedRoute>
             }
           />
