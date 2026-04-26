@@ -15,7 +15,7 @@ interface LoginPageProps {
   onLoginSuccess?: (user: User) => void;
 }
 
-type UserRole = "admin" | "district_manager" | null;
+type UserRole = "admin" | "district_manager" | "facility_manager" | null;
 
 export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
   const navigate = useNavigate();
@@ -51,6 +51,9 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
             } else if (role === "district_manager") {
               setRedirecting(true);
               navigate("/district-manager");
+            } else if (role === "facility_manager") {
+              setRedirecting(true);
+              navigate("/facility-manager");
             }
           }
         } catch (err) {
@@ -135,6 +138,8 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
         navigate("/admin");
       } else if (role === "district_manager") {
         navigate("/district-manager");
+      } else if (role === "facility_manager") {
+        navigate("/facility-manager");
       }
     } catch (err: any) {
       // Handle Firebase errors
