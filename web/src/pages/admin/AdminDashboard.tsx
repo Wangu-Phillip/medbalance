@@ -43,6 +43,7 @@ interface MedicineRecord {
   name: string;
   quantity: number;
   unit: string;
+  dosageForm?: string;
   expiryDate: string;
   districtId: string;
   districtName: string;
@@ -88,7 +89,23 @@ interface FacilityManager {
   uid?: string;
   districtId: string;
   districtName: string;
-  facility: string;
+  facilityId?: string;
+  facilityName?: string;
+  facility?: string; // legacy field
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+interface MedicineRequest {
+  id: string;
+  medicineName: string;
+  dosageForm: string;
+  requestedQuantity: number;
+  unit: string;
+  reason: string;
+  status: "pending" | "approved" | "rejected";
+  districtId: string;
+  districtName: string;
   createdAt?: number;
   updatedAt?: number;
 }
@@ -106,7 +123,7 @@ interface Facility {
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<
-    "overview" | "medicines" | "districts" | "facilities" | "managers" | "data"
+    "overview" | "medicines" | "districts" | "facilities" | "managers" | "requests" | "data"
   >("overview");
   const [loggingOut, setLoggingOut] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -153,6 +170,7 @@ export default function AdminDashboard() {
     name: "",
     quantity: "",
     unit: "",
+    dosageForm: "",
     expiryDate: "",
     districtId: "",
   });
@@ -170,8 +188,11 @@ export default function AdminDashboard() {
     name: "",
     email: "",
     districtId: "",
-    facility: "",
+    facilityId: "",
+    facilityName: "",
   });
+  const [requests, setRequests] = useState<MedicineRequest[]>([]);
+  const [medicineSearch, setMedicineSearch] = useState("");
 
   // Fetch medicines and districts from Firestore
   useEffect(() => {
@@ -240,6 +261,16 @@ export default function AdminDashboard() {
         ...doc.data(),
       })) as FacilityManager[];
       setFacilityManagers(facilityManagersData);
+
+      // Fetch medicine requests
+      const requestsSnapshot = await getDocs(
+        query(collection(db, "medicineRequests"), orderBy("createdAt", "desc")),
+      );
+      const requestsData = requestsSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as MedicineRequest[];
+      setRequests(requestsData);
 
       setError(null);
     } catch (err) {
@@ -323,6 +354,36 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleApproveRequest = async (requestId: string) => {
+    try {
+      await updateDoc(doc(db, "medicineRequests", requestId), {
+        status: "approved",
+        updatedAt: Date.now(),
+      });
+      setSuccess("Request approved");
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error approving request:", err);
+      setError("Failed to approve request");
+    }
+  };
+
+  const handleRejectRequest = async (requestId: string) => {
+    try {
+      await updateDoc(doc(db, "medicineRequests", requestId), {
+        status: "rejected",
+        updatedAt: Date.now(),
+      });
+      setSuccess("Request rejected");
+      await fetchData();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error("Error rejecting request:", err);
+      setError("Failed to reject request");
+    }
+  };
+
   const handleLogout = async () => {
     try {
       setLoggingOut(true);
@@ -361,6 +422,7 @@ export default function AdminDashboard() {
           name: newMedicine.name,
           quantity: parseInt(newMedicine.quantity),
           unit: newMedicine.unit,
+          dosageForm: newMedicine.dosageForm,
           expiryDate: newMedicine.expiryDate,
           districtId: newMedicine.districtId,
           districtName: districtName,
@@ -374,6 +436,7 @@ export default function AdminDashboard() {
           name: newMedicine.name,
           quantity: parseInt(newMedicine.quantity),
           unit: newMedicine.unit,
+          dosageForm: newMedicine.dosageForm,
           expiryDate: newMedicine.expiryDate,
           districtId: newMedicine.districtId,
           districtName: districtName,
@@ -386,6 +449,7 @@ export default function AdminDashboard() {
         name: "",
         quantity: "",
         unit: "",
+        dosageForm: "",
         expiryDate: "",
         districtId: "",
       });
@@ -426,6 +490,7 @@ export default function AdminDashboard() {
       name: medicine.name,
       quantity: medicine.quantity.toString(),
       unit: medicine.unit,
+      dosageForm: medicine.dosageForm || "",
       expiryDate: medicine.expiryDate,
       districtId: medicine.districtId,
     });
@@ -557,6 +622,7 @@ export default function AdminDashboard() {
       name: "",
       quantity: "",
       unit: "",
+      dosageForm: "",
       expiryDate: "",
       districtId: "",
     });
@@ -872,7 +938,7 @@ export default function AdminDashboard() {
       !newFacilityManager.name ||
       !newFacilityManager.email ||
       !newFacilityManager.districtId ||
-      !newFacilityManager.facility
+      !newFacilityManager.facilityId
     ) {
       setError("Please fill all facility manager fields");
       return;
@@ -882,7 +948,8 @@ export default function AdminDashboard() {
     const existingFacilityManager = facilityManagers.find(
       (fm) =>
         fm.districtId === newFacilityManager.districtId &&
-        fm.facility === newFacilityManager.facility,
+        (fm.facilityId === newFacilityManager.facilityId ||
+          fm.facility === newFacilityManager.facilityName),
     );
     if (existingFacilityManager && !editingFacilityManager) {
       setError(
@@ -907,7 +974,9 @@ export default function AdminDashboard() {
             email: newFacilityManager.email,
             districtId: newFacilityManager.districtId,
             districtName: districtName,
-            facility: newFacilityManager.facility,
+            facilityId: newFacilityManager.facilityId,
+            facilityName: newFacilityManager.facilityName,
+            facility: newFacilityManager.facilityName, // keep legacy field in sync
             updatedAt: now,
           },
         );
@@ -931,7 +1000,9 @@ export default function AdminDashboard() {
           uid: uid,
           districtId: newFacilityManager.districtId,
           districtName: districtName,
-          facility: newFacilityManager.facility,
+          facilityId: newFacilityManager.facilityId,
+          facilityName: newFacilityManager.facilityName,
+          facility: newFacilityManager.facilityName, // keep legacy field in sync
           createdAt: now,
           updatedAt: now,
         });
@@ -943,7 +1014,8 @@ export default function AdminDashboard() {
         name: "",
         email: "",
         districtId: "",
-        facility: "",
+        facilityId: "",
+        facilityName: "",
       });
       await fetchData();
       setTimeout(() => setSuccess(null), 3000);
@@ -981,7 +1053,8 @@ export default function AdminDashboard() {
       name: facilityManager.name,
       email: facilityManager.email,
       districtId: facilityManager.districtId,
-      facility: facilityManager.facility,
+      facilityId: facilityManager.facilityId || "",
+      facilityName: facilityManager.facilityName || facilityManager.facility || "",
     });
   };
 
@@ -992,7 +1065,8 @@ export default function AdminDashboard() {
       name: "",
       email: "",
       districtId: "",
-      facility: "",
+      facilityId: "",
+      facilityName: "",
     });
   };
 
@@ -1242,6 +1316,7 @@ export default function AdminDashboard() {
             { key: "districts", label: "Districts" },
             { key: "facilities", label: "Facilities" },
             { key: "managers", label: "Managers" },
+            { key: "requests", label: `Requests${requests.filter(r => r.status === "pending").length > 0 ? ` (${requests.filter(r => r.status === "pending").length})` : ""}` },
             { key: "data", label: "Data Management" },
           ].map((tab) => (
             <button
@@ -1254,6 +1329,7 @@ export default function AdminDashboard() {
                     | "districts"
                     | "facilities"
                     | "managers"
+                    | "requests"
                     | "data",
                 )
               }
@@ -1416,26 +1492,36 @@ export default function AdminDashboard() {
             {activeTab === "medicines" && (
               <div className="space-y-6">
                 {/* Header with Add Button */}
-                <div className="flex justify-between items-center">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                   <h2 className="text-2xl font-bold text-cyan-400">
                     Medicine Inventory
                   </h2>
-                  <button
-                    onClick={() => {
-                      setEditingMedicine(null);
-                      setNewMedicine({
-                        name: "",
-                        quantity: "",
-                        unit: "",
-                        expiryDate: "",
-                        districtId: "",
-                      });
-                      setShowAddMedicineModal(true);
-                    }}
-                    className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-cyan-400 hover:from-cyan-600 hover:to-cyan-500 text-slate-900 font-semibold rounded-lg transition-all"
-                  >
-                    + Add Medicine
-                  </button>
+                  <div className="flex gap-3 items-center w-full sm:w-auto">
+                    <input
+                      type="text"
+                      placeholder="Search by name or form..."
+                      value={medicineSearch}
+                      onChange={(e) => setMedicineSearch(e.target.value)}
+                      className="flex-1 sm:w-64 px-3 py-2 bg-slate-800/50 border border-cyan-500/20 rounded-lg text-slate-50 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-400 text-sm"
+                    />
+                    <button
+                      onClick={() => {
+                        setEditingMedicine(null);
+                        setNewMedicine({
+                          name: "",
+                          quantity: "",
+                          unit: "",
+                          dosageForm: "",
+                          expiryDate: "",
+                          districtId: "",
+                        });
+                        setShowAddMedicineModal(true);
+                      }}
+                      className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-cyan-400 hover:from-cyan-600 hover:to-cyan-500 text-slate-900 font-semibold rounded-lg transition-all whitespace-nowrap"
+                    >
+                      + Add Medicine
+                    </button>
+                  </div>
                 </div>
 
                 {/* Modal for Add/Edit Medicine */}
@@ -1518,7 +1604,7 @@ export default function AdminDashboard() {
 
                           <input
                             type="text"
-                            placeholder="Unit (e.g., tablets, capsules)"
+                            placeholder="Unit (e.g., 500mg, bottles)"
                             value={newMedicine.unit}
                             onChange={(e) =>
                               setNewMedicine({
@@ -1529,6 +1615,28 @@ export default function AdminDashboard() {
                             disabled={savingMedicine}
                             className="px-3 py-2 bg-slate-800/50 border border-cyan-500/20 rounded-lg text-slate-50 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
                           />
+
+                          <select
+                            value={newMedicine.dosageForm}
+                            onChange={(e) =>
+                              setNewMedicine({
+                                ...newMedicine,
+                                dosageForm: e.target.value,
+                              })
+                            }
+                            disabled={savingMedicine}
+                            className="px-3 py-2 bg-slate-800/50 border border-cyan-500/20 rounded-lg text-slate-50 focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <option value="">-- Dosage Form --</option>
+                            <option value="Tablet">Tablet</option>
+                            <option value="Capsule">Capsule</option>
+                            <option value="Syrup">Syrup</option>
+                            <option value="Powder">Powder</option>
+                            <option value="Injection">Injection</option>
+                            <option value="Drops">Drops</option>
+                            <option value="Cream/Ointment">Cream/Ointment</option>
+                            <option value="Other">Other</option>
+                          </select>
 
                           <input
                             type="date"
@@ -1616,7 +1724,7 @@ export default function AdminDashboard() {
                         {/* Unassigned Medicines List */}
                         <div className="space-y-3 p-4">
                           {medicines
-                            .filter((m) => !m.districtId)
+                            .filter((m) => !m.districtId && (medicineSearch === "" || m.name.toLowerCase().includes(medicineSearch.toLowerCase()) || (m.dosageForm || "").toLowerCase().includes(medicineSearch.toLowerCase())))
                             .map((medicine) => (
                               <div
                                 key={medicine.id}
@@ -1624,9 +1732,16 @@ export default function AdminDashboard() {
                               >
                                 <div className="flex justify-between items-start">
                                   <div className="flex-1">
-                                    <p className="font-semibold text-yellow-400">
-                                      {medicine.name}
-                                    </p>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <p className="font-semibold text-yellow-400">
+                                        {medicine.name}
+                                      </p>
+                                      {medicine.dosageForm && (
+                                        <span className="px-2 py-0.5 text-xs rounded-full bg-yellow-500/10 text-yellow-300 border border-yellow-500/20">
+                                          {medicine.dosageForm}
+                                        </span>
+                                      )}
+                                    </div>
                                     <p className="text-sm text-slate-400">
                                       {medicine.quantity} {medicine.unit}
                                     </p>
@@ -1665,7 +1780,7 @@ export default function AdminDashboard() {
                     {/* Assigned Medicines by District */}
                     {districts.map((district) => {
                       const districtMedicines = medicines.filter(
-                        (m) => m.districtId === district.id,
+                        (m) => m.districtId === district.id && (medicineSearch === "" || m.name.toLowerCase().includes(medicineSearch.toLowerCase()) || (m.dosageForm || "").toLowerCase().includes(medicineSearch.toLowerCase())),
                       );
                       if (districtMedicines.length === 0) return null;
 
@@ -1709,9 +1824,16 @@ export default function AdminDashboard() {
                                   <div className="p-4 bg-slate-900/50">
                                     <div className="flex justify-between items-start">
                                       <div className="flex-1">
-                                        <p className="font-semibold text-cyan-400">
-                                          {medicine.name}
-                                        </p>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <p className="font-semibold text-cyan-400">
+                                            {medicine.name}
+                                          </p>
+                                          {medicine.dosageForm && (
+                                            <span className="px-2 py-0.5 text-xs rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                                              {medicine.dosageForm}
+                                            </span>
+                                          )}
+                                        </div>
                                         <p className="text-sm text-slate-400">
                                           Total: {medicine.quantity}{" "}
                                           {medicine.unit} | Allocated:{" "}
@@ -2457,7 +2579,8 @@ export default function AdminDashboard() {
                             setNewFacilityManager({
                               ...newFacilityManager,
                               districtId: e.target.value,
-                              facility: "",
+                              facilityId: "",
+                              facilityName: "",
                             })
                           }
                           disabled={savingManager}
@@ -2471,13 +2594,17 @@ export default function AdminDashboard() {
                           ))}
                         </select>
                         <select
-                          value={newFacilityManager.facility}
-                          onChange={(e) =>
+                          value={newFacilityManager.facilityId}
+                          onChange={(e) => {
+                            const selectedFacility = facilities.find(
+                              (f) => f.id === e.target.value,
+                            );
                             setNewFacilityManager({
                               ...newFacilityManager,
-                              facility: e.target.value,
-                            })
-                          }
+                              facilityId: e.target.value,
+                              facilityName: selectedFacility?.name || "",
+                            });
+                          }}
                           disabled={
                             savingManager || !newFacilityManager.districtId
                           }
@@ -2488,10 +2615,10 @@ export default function AdminDashboard() {
                             getDistrictFacilities(
                               newFacilityManager.districtId,
                             ).map((facility) => (
-                              <option key={facility.id} value={facility.name}>
+                              <option key={facility.id} value={facility.id}>
                                 {facility.name}
                               </option>
-                            ))}
+                            ))}  
                         </select>
                         <button
                           type="submit"
@@ -2567,7 +2694,7 @@ export default function AdminDashboard() {
                                   District: {fm.districtName}
                                 </p>
                                 <p className="text-xs text-slate-500">
-                                  Facility: {fm.facility}
+                                  Facility: {fm.facilityName || fm.facility}
                                 </p>
                               </div>
                               <div className="flex gap-2">
@@ -2594,6 +2721,101 @@ export default function AdminDashboard() {
                       </div>
                     </div>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* Requests Tab */}
+            {activeTab === "requests" && (
+              <div className="space-y-6">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-2xl font-bold text-cyan-400">
+                    Medicine Requests
+                  </h2>
+                  <div className="text-sm text-slate-400">
+                    {requests.filter(r => r.status === "pending").length} pending
+                  </div>
+                </div>
+
+                <div className="p-6 rounded-xl border border-cyan-500/20 bg-gradient-to-br from-slate-800/60 to-slate-900/60">
+                  {requests.length === 0 ? (
+                    <p className="text-center text-slate-400 py-8">
+                      No medicine requests from districts yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {requests.map((req) => (
+                        <div
+                          key={req.id}
+                          className="p-4 rounded-lg bg-slate-900/50 border border-cyan-500/10"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 flex-wrap mb-2">
+                                <p className="font-semibold text-cyan-400">
+                                  {req.medicineName}
+                                </p>
+                                {req.dosageForm && (
+                                  <span className="px-2 py-0.5 text-xs rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                                    {req.dosageForm}
+                                  </span>
+                                )}
+                                <span
+                                  className={`px-2 py-0.5 text-xs rounded-full font-semibold ${
+                                    req.status === "approved"
+                                      ? "bg-emerald-500/20 text-emerald-300"
+                                      : req.status === "rejected"
+                                      ? "bg-red-500/20 text-red-300"
+                                      : "bg-yellow-500/20 text-yellow-300"
+                                  }`}
+                                >
+                                  {req.status.toUpperCase()}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                                <div>
+                                  <p className="text-slate-400 text-xs">District</p>
+                                  <p className="text-slate-200">{req.districtName}</p>
+                                </div>
+                                <div>
+                                  <p className="text-slate-400 text-xs">Requested Qty</p>
+                                  <p className="text-slate-200 font-semibold">
+                                    {req.requestedQuantity} {req.unit}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-slate-400 text-xs">Reason</p>
+                                  <p className="text-slate-300 text-xs">{req.reason || "—"}</p>
+                                </div>
+                                <div>
+                                  <p className="text-slate-400 text-xs">Date</p>
+                                  <p className="text-slate-300 text-xs">
+                                    {new Date(req.createdAt || 0).toLocaleDateString()}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                            {req.status === "pending" && (
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleApproveRequest(req.id)}
+                                  className="px-4 py-2 bg-emerald-500/20 text-emerald-300 rounded-lg hover:bg-emerald-500/30 transition-all font-semibold text-sm"
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  onClick={() => handleRejectRequest(req.id)}
+                                  className="px-4 py-2 bg-red-500/20 text-red-300 rounded-lg hover:bg-red-500/30 transition-all font-semibold text-sm"
+                                >
+                                  Reject
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
